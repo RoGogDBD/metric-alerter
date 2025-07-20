@@ -3,8 +3,9 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+
+	"github.com/go-chi/chi"
 )
 
 func TestHandler_ServeHTTP(t *testing.T) {
@@ -36,7 +37,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 			name:       "Invalid type",
 			method:     http.MethodPost,
 			url:        "/update/unknown/Alloc/123.45",
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusNotImplemented,
 		},
 		{
 			name:       "Malformed path",
@@ -55,14 +56,18 @@ func TestHandler_ServeHTTP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := &Handler{
-				gauge:   make(map[string]float64),
-				counter: make(map[string]int64),
+				storage: NewMemStorage(),
 			}
 
-			req := httptest.NewRequest(tt.method, tt.url, strings.NewReader(""))
+			r := chi.NewRouter()
+			r.Post("/update/{type}/{name}/{value}", handler.handleUpdate)
+			r.Get("/value/{type}/{name}", handler.handleGetMetricValue)
+			r.Get("/", handler.handleMetricsPage)
+
+			req := httptest.NewRequest(tt.method, tt.url, nil)
 			w := httptest.NewRecorder()
 
-			handler.ServeHTTP(w, req)
+			r.ServeHTTP(w, req)
 
 			resp := w.Result()
 			defer resp.Body.Close()
