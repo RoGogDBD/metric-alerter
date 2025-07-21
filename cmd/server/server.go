@@ -1,6 +1,9 @@
 package main
 
 import (
+	"flag"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -136,6 +139,37 @@ func (h *Handler) handleMetricsPage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(builder.String()))
 }
 
+type NetAddress struct {
+	Host string
+	Port int
+}
+
+func (a NetAddress) String() string {
+	return a.Host + ":" + strconv.Itoa(a.Port)
+}
+
+func (a *NetAddress) Set(s string) error {
+	hp := strings.Split(s, ":")
+	a.Host = hp[0]
+	if len(hp) == 2 {
+		port, err := strconv.Atoi(hp[1])
+		if err != nil {
+			return err
+		}
+		a.Port = port
+	} else {
+		a.Port = 8080
+	}
+	return nil
+}
+
+func parseFlags() *NetAddress {
+	addr := &NetAddress{Host: "localhost", Port: 8080}
+	flag.Var(addr, "a", "Net address host:post")
+	flag.Parse()
+	return addr
+}
+
 func main() {
 	storage := NewMemStorage()
 	handler := &Handler{storage: storage}
@@ -145,5 +179,7 @@ func main() {
 	r.Get("/value/{type}/{name}", handler.handleGetMetricValue)
 	r.Get("/", handler.handleMetricsPage)
 
-	http.ListenAndServe(":8080", r)
+	addr := parseFlags()
+	fmt.Println("Server started at", addr.String())
+	log.Fatal(http.ListenAndServe(addr.String(), r))
 }
