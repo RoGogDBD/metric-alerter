@@ -12,13 +12,12 @@ import (
 func TestSendMetrics(t *testing.T) {
 	tests := []struct {
 		name     string
-		metric   interface{}
+		metric   Metric
 		expected string
 		status   int
 	}{
-		{"GaugeSuccess", 12.3, "/update/gauge/TestMetric/12.3", http.StatusOK},
-		{"CounterSuccess", int64(5), "/update/counter/TestMetric/5", http.StatusOK},
-		{"UnknownType", "unsupported", "", 0},
+		{"GaugeSuccess", Metric{"gauge", 12.3}, "/update/gauge/TestMetric/12.3", http.StatusOK},
+		{"CounterSuccess", Metric{"counter", 5}, "/update/counter/TestMetric/5", http.StatusOK},
 	}
 
 	for _, tc := range tests {

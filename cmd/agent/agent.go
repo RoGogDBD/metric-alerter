@@ -18,71 +18,67 @@ var (
 	pollDefault   int
 	reportDefault int
 	pollCount     int64
-	metrics       = make(map[string]interface{})
+	metrics       = make(map[string]Metric)
 	rng           = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
+
+type Metric struct {
+	Type  string
+	Value float64
+}
 
 func collectMetrics() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	metrics["Alloc"] = float64(m.Alloc)
-	metrics["BuckHashSys"] = float64(m.BuckHashSys)
-	metrics["Frees"] = float64(m.Frees)
-	metrics["GCCPUFraction"] = m.GCCPUFraction
-	metrics["GCSys"] = float64(m.GCSys)
-	metrics["HeapAlloc"] = float64(m.HeapAlloc)
-	metrics["HeapIdle"] = float64(m.HeapIdle)
-	metrics["HeapInuse"] = float64(m.HeapInuse)
-	metrics["HeapObjects"] = float64(m.HeapObjects)
-	metrics["HeapReleased"] = float64(m.HeapReleased)
-	metrics["HeapSys"] = float64(m.HeapSys)
-	metrics["LastGC"] = float64(m.LastGC)
-	metrics["Lookups"] = float64(m.Lookups)
-	metrics["MCacheInuse"] = float64(m.MCacheInuse)
-	metrics["MCacheSys"] = float64(m.MCacheSys)
-	metrics["MSpanInuse"] = float64(m.MSpanInuse)
-	metrics["MSpanSys"] = float64(m.MSpanSys)
-	metrics["Mallocs"] = float64(m.Mallocs)
-	metrics["NextGC"] = float64(m.NextGC)
-	metrics["NumForcedGC"] = float64(m.NumForcedGC)
-	metrics["NumGC"] = float64(m.NumGC)
-	metrics["OtherSys"] = float64(m.OtherSys)
-	metrics["PauseTotalNs"] = float64(m.PauseTotalNs)
-	metrics["StackInuse"] = float64(m.StackInuse)
-	metrics["StackSys"] = float64(m.StackSys)
-	metrics["Sys"] = float64(m.Sys)
-	metrics["TotalAlloc"] = float64(m.TotalAlloc)
-	metrics["PollCount"] = pollCount
-	metrics["RandomValue"] = rng.Float64() * 100
+	metrics["Alloc"] = Metric{"gauge", float64(m.Alloc)}
+	metrics["BuckHashSys"] = Metric{"gauge", float64(m.BuckHashSys)}
+	metrics["Frees"] = Metric{"counter", float64(m.Frees)}
+	metrics["GCCPUFraction"] = Metric{"gauge", m.GCCPUFraction}
+	metrics["GCSys"] = Metric{"gauge", float64(m.GCSys)}
+	metrics["HeapAlloc"] = Metric{"gauge", float64(m.HeapAlloc)}
+	metrics["HeapIdle"] = Metric{"gauge", float64(m.HeapIdle)}
+	metrics["HeapInuse"] = Metric{"gauge", float64(m.HeapInuse)}
+	metrics["HeapObjects"] = Metric{"gauge", float64(m.HeapObjects)}
+	metrics["HeapReleased"] = Metric{"gauge", float64(m.HeapReleased)}
+	metrics["HeapSys"] = Metric{"gauge", float64(m.HeapSys)}
+	metrics["LastGC"] = Metric{"gauge", float64(m.LastGC)}
+	metrics["Lookups"] = Metric{"counter", float64(m.Lookups)}
+	metrics["MCacheInuse"] = Metric{"gauge", float64(m.MCacheInuse)}
+	metrics["MCacheSys"] = Metric{"gauge", float64(m.MCacheSys)}
+	metrics["MSpanInuse"] = Metric{"gauge", float64(m.MSpanInuse)}
+	metrics["MSpanSys"] = Metric{"gauge", float64(m.MSpanSys)}
+	metrics["Mallocs"] = Metric{"counter", float64(m.Mallocs)}
+	metrics["NextGC"] = Metric{"gauge", float64(m.NextGC)}
+	metrics["NumForcedGC"] = Metric{"counter", float64(m.NumForcedGC)}
+	metrics["NumGC"] = Metric{"counter", float64(m.NumGC)}
+	metrics["OtherSys"] = Metric{"gauge", float64(m.OtherSys)}
+	metrics["PauseTotalNs"] = Metric{"counter", float64(m.PauseTotalNs)}
+	metrics["StackInuse"] = Metric{"gauge", float64(m.StackInuse)}
+	metrics["StackSys"] = Metric{"gauge", float64(m.StackSys)}
+	metrics["Sys"] = Metric{"gauge", float64(m.Sys)}
+	metrics["TotalAlloc"] = Metric{"gauge", float64(m.TotalAlloc)}
+	metrics["PollCount"] = Metric{"counter", float64(pollCount)}
+	metrics["RandomValue"] = Metric{"gauge", rng.Float64() * 100}
 
 	pollCount++
 }
 
 func sendMetrics(client *resty.Client) {
-	for name, val := range metrics {
-		params := map[string]string{
-			"mName": name,
-		}
-		var mType, mValue string
-		switch v := val.(type) {
-		case float64:
-			mType = "gauge"
-			mValue = strconv.FormatFloat(v, 'f', -1, 64)
-		case int64:
-			mType = "counter"
-			mValue = strconv.FormatInt(v, 10)
-		default:
-			log.Printf("Unknown type of metric %s: %T", name, val)
-			continue
-		}
-		params["mType"] = mType
-		params["mValue"] = mValue
+	for name, metric := range metrics {
+		mType := metric.Type
+		mValue := strconv.FormatFloat(metric.Value, 'f', -1, 64)
 
+		params := map[string]string{
+			"mName":  name,
+			"mType":  mType,
+			"mValue": mValue,
+		}
 		resp, err := client.R().
 			SetPathParams(params).
 			SetHeader("Content-Type", "text/plain").
 			Post("/update/{mType}/{mName}/{mValue}")
+
 		if err != nil {
 			log.Printf("Error sending metric %s: %v", name, err)
 			continue
