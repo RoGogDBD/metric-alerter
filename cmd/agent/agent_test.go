@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,8 +23,13 @@ func TestSendMetrics(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resetMetrics()
-			metrics["TestMetric"] = tc.metric
+			state := &AgentState{
+				PollInterval:   2,
+				ReportInterval: 10,
+				PollCount:      0,
+				Metrics:        map[string]Metric{"TestMetric": tc.metric},
+				Rng:            rand.New(rand.NewSource(1)),
+			}
 
 			var actualPath string
 
@@ -34,19 +40,13 @@ func TestSendMetrics(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			client := resty.New().SetBaseURL(ts.URL)
-			sendMetrics(client)
+			state.Client = resty.New().SetBaseURL(ts.URL)
+
+			sendMetrics(state)
 
 			if tc.expected != "" && actualPath != tc.expected {
 				t.Errorf("expected path %q, got %q", tc.expected, actualPath)
 			}
 		})
 	}
-}
-
-func resetMetrics() {
-	for k := range metrics {
-		delete(metrics, k)
-	}
-	pollCount = 0
 }

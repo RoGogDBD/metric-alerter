@@ -14,58 +14,59 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-var (
-	pollDefault   int
-	reportDefault int
-	pollCount     int64
-	metrics       = make(map[string]Metric)
-	rng           = rand.New(rand.NewSource(time.Now().UnixNano()))
-)
+type AgentState struct {
+	PollInterval   int
+	ReportInterval int
+	PollCount      int64
+	Metrics        map[string]Metric
+	Rng            *rand.Rand
+	Client         *resty.Client
+}
 
 type Metric struct {
 	Type  string
 	Value float64
 }
 
-func collectMetrics() {
+func collectMetrics(state *AgentState) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	metrics["Alloc"] = Metric{"gauge", float64(m.Alloc)}
-	metrics["BuckHashSys"] = Metric{"gauge", float64(m.BuckHashSys)}
-	metrics["Frees"] = Metric{"counter", float64(m.Frees)}
-	metrics["GCCPUFraction"] = Metric{"gauge", m.GCCPUFraction}
-	metrics["GCSys"] = Metric{"gauge", float64(m.GCSys)}
-	metrics["HeapAlloc"] = Metric{"gauge", float64(m.HeapAlloc)}
-	metrics["HeapIdle"] = Metric{"gauge", float64(m.HeapIdle)}
-	metrics["HeapInuse"] = Metric{"gauge", float64(m.HeapInuse)}
-	metrics["HeapObjects"] = Metric{"gauge", float64(m.HeapObjects)}
-	metrics["HeapReleased"] = Metric{"gauge", float64(m.HeapReleased)}
-	metrics["HeapSys"] = Metric{"gauge", float64(m.HeapSys)}
-	metrics["LastGC"] = Metric{"gauge", float64(m.LastGC)}
-	metrics["Lookups"] = Metric{"counter", float64(m.Lookups)}
-	metrics["MCacheInuse"] = Metric{"gauge", float64(m.MCacheInuse)}
-	metrics["MCacheSys"] = Metric{"gauge", float64(m.MCacheSys)}
-	metrics["MSpanInuse"] = Metric{"gauge", float64(m.MSpanInuse)}
-	metrics["MSpanSys"] = Metric{"gauge", float64(m.MSpanSys)}
-	metrics["Mallocs"] = Metric{"counter", float64(m.Mallocs)}
-	metrics["NextGC"] = Metric{"gauge", float64(m.NextGC)}
-	metrics["NumForcedGC"] = Metric{"counter", float64(m.NumForcedGC)}
-	metrics["NumGC"] = Metric{"counter", float64(m.NumGC)}
-	metrics["OtherSys"] = Metric{"gauge", float64(m.OtherSys)}
-	metrics["PauseTotalNs"] = Metric{"counter", float64(m.PauseTotalNs)}
-	metrics["StackInuse"] = Metric{"gauge", float64(m.StackInuse)}
-	metrics["StackSys"] = Metric{"gauge", float64(m.StackSys)}
-	metrics["Sys"] = Metric{"gauge", float64(m.Sys)}
-	metrics["TotalAlloc"] = Metric{"gauge", float64(m.TotalAlloc)}
-	metrics["PollCount"] = Metric{"counter", float64(pollCount)}
-	metrics["RandomValue"] = Metric{"gauge", rng.Float64() * 100}
+	state.Metrics["Alloc"] = Metric{"gauge", float64(m.Alloc)}
+	state.Metrics["BuckHashSys"] = Metric{"gauge", float64(m.BuckHashSys)}
+	state.Metrics["Frees"] = Metric{"counter", float64(m.Frees)}
+	state.Metrics["GCCPUFraction"] = Metric{"gauge", m.GCCPUFraction}
+	state.Metrics["GCSys"] = Metric{"gauge", float64(m.GCSys)}
+	state.Metrics["HeapAlloc"] = Metric{"gauge", float64(m.HeapAlloc)}
+	state.Metrics["HeapIdle"] = Metric{"gauge", float64(m.HeapIdle)}
+	state.Metrics["HeapInuse"] = Metric{"gauge", float64(m.HeapInuse)}
+	state.Metrics["HeapObjects"] = Metric{"gauge", float64(m.HeapObjects)}
+	state.Metrics["HeapReleased"] = Metric{"gauge", float64(m.HeapReleased)}
+	state.Metrics["HeapSys"] = Metric{"gauge", float64(m.HeapSys)}
+	state.Metrics["LastGC"] = Metric{"gauge", float64(m.LastGC)}
+	state.Metrics["Lookups"] = Metric{"counter", float64(m.Lookups)}
+	state.Metrics["MCacheInuse"] = Metric{"gauge", float64(m.MCacheInuse)}
+	state.Metrics["MCacheSys"] = Metric{"gauge", float64(m.MCacheSys)}
+	state.Metrics["MSpanInuse"] = Metric{"gauge", float64(m.MSpanInuse)}
+	state.Metrics["MSpanSys"] = Metric{"gauge", float64(m.MSpanSys)}
+	state.Metrics["Mallocs"] = Metric{"counter", float64(m.Mallocs)}
+	state.Metrics["NextGC"] = Metric{"gauge", float64(m.NextGC)}
+	state.Metrics["NumForcedGC"] = Metric{"counter", float64(m.NumForcedGC)}
+	state.Metrics["NumGC"] = Metric{"counter", float64(m.NumGC)}
+	state.Metrics["OtherSys"] = Metric{"gauge", float64(m.OtherSys)}
+	state.Metrics["PauseTotalNs"] = Metric{"counter", float64(m.PauseTotalNs)}
+	state.Metrics["StackInuse"] = Metric{"gauge", float64(m.StackInuse)}
+	state.Metrics["StackSys"] = Metric{"gauge", float64(m.StackSys)}
+	state.Metrics["Sys"] = Metric{"gauge", float64(m.Sys)}
+	state.Metrics["TotalAlloc"] = Metric{"gauge", float64(m.TotalAlloc)}
+	state.Metrics["PollCount"] = Metric{"counter", float64(state.PollCount)}
+	state.Metrics["RandomValue"] = Metric{"gauge", state.Rng.Float64() * 100}
 
-	pollCount++
+	state.PollCount++
 }
 
-func sendMetrics(client *resty.Client) {
-	for name, metric := range metrics {
+func sendMetrics(state *AgentState) {
+	for name, metric := range state.Metrics {
 		mType := metric.Type
 		mValue := strconv.FormatFloat(metric.Value, 'f', -1, 64)
 
@@ -74,7 +75,7 @@ func sendMetrics(client *resty.Client) {
 			"mType":  mType,
 			"mValue": mValue,
 		}
-		resp, err := client.R().
+		resp, err := state.Client.R().
 			SetPathParams(params).
 			SetHeader("Content-Type", "text/plain").
 			Post("/update/{mType}/{mName}/{mValue}")
@@ -113,44 +114,51 @@ func (a *NetAddress) Set(s string) error {
 	return nil
 }
 
-func parseFlags() *NetAddress {
+func parseFlags() (*NetAddress, *AgentState) {
 	addr := &NetAddress{Host: "localhost", Port: 8080}
-	flag.Var(addr, "a", "Net address host:post")
-	flag.IntVar(&reportDefault, "r", 10, "Report interval in seconds (default: 10)")
-	flag.IntVar(&pollDefault, "p", 2, "Poll interval in seconds (default: 2)")
+	poll := flag.Int("p", 2, "Poll interval in seconds")
+	report := flag.Int("r", 10, "Report interval in seconds")
+	flag.Var(addr, "a", "Net address host:port")
 	flag.Parse()
 
-	return addr
+	state := &AgentState{
+		PollInterval:   *poll,
+		ReportInterval: *report,
+		PollCount:      0,
+		Metrics:        make(map[string]Metric),
+		Rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+
+	return addr, state
 }
 
 func main() {
-	addr := parseFlags()
+	addr, state := parseFlags()
 
 	fmt.Println("Server URL", addr.String())
-	fmt.Println("Report interval", reportDefault)
-	fmt.Println("Poll interval", pollDefault)
-	pollDur := time.Duration(pollDefault) * time.Second
-	reportDur := time.Duration(reportDefault) * time.Second
+	fmt.Println("Report interval", state.ReportInterval)
+	fmt.Println("Poll interval", state.PollInterval)
 
-	client := resty.New().
+	state.Client = resty.New().
 		SetBaseURL("http://" + addr.String()).
 		SetTimeout(5 * time.Second).
 		SetRetryCount(3).
 		SetRetryWaitTime(500 * time.Millisecond)
 
+	pollDur := time.Duration(state.PollInterval) * time.Second
+	reportDur := time.Duration(state.ReportInterval) * time.Second
+
 	pollTicker := time.NewTicker(pollDur)
 	reportTicker := time.NewTicker(reportDur)
-
 	defer pollTicker.Stop()
 	defer reportTicker.Stop()
 
 	for {
 		select {
 		case <-pollTicker.C:
-			collectMetrics()
-
+			collectMetrics(state)
 		case <-reportTicker.C:
-			sendMetrics(client)
+			sendMetrics(state)
 		}
 	}
 }
