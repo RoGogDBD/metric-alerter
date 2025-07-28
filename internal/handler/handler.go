@@ -1,0 +1,119 @@
+package handler
+
+import (
+	"errors"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/RoGogDBD/metric-alerter/internal/repository"
+	"github.com/go-chi/chi"
+)
+
+type Handler struct {
+	storage repository.Storage
+}
+
+func NewHandler(storage repository.Storage) *Handler {
+	return &Handler{storage: storage}
+}
+
+var (
+	ErrUnknownMetricType = errors.New("unknown metric type")
+	ErrInvalidValue      = errors.New("invalid value for metric type")
+)
+
+func ValidateMetricInput(metricType, metricName, metricValue string) (*repository.MetricUpdate, error) {
+	switch metricType {
+	case "gauge":
+		v, err := strconv.ParseFloat(metricValue, 64)
+		if err != nil {
+			return nil, err
+		}
+		return &repository.MetricUpdate{
+			Type:     "gauge",
+			Name:     metricName,
+			FloatVal: &v,
+		}, nil
+	case "counter":
+		v, err := strconv.ParseInt(metricValue, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return &repository.MetricUpdate{
+			Type:   "counter",
+			Name:   metricName,
+			IntVal: &v,
+		}, nil
+	default:
+		return nil, ErrUnknownMetricType
+	}
+}
+
+func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
+	metricType := chi.URLParam(r, "type")
+	metricName := chi.URLParam(r, "name")
+	metricValue := chi.URLParam(r, "value")
+
+	metric, err := ValidateMetricInput(metricType, metricName, metricValue)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrUnknownMetricType) {
+			status = http.StatusNotImplemented
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	switch metric.Type {
+	case "gauge":
+		h.storage.SetGauge(metric.Name, *metric.FloatVal)
+	case "counter":
+		h.storage.AddCounter(metric.Name, *metric.IntVal)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) HandleGetMetricValue(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	metricType := chi.URLParam(r, "type")
+	metricName := chi.URLParam(r, "name")
+
+	switch metricType {
+	case "gauge":
+		val, ok := h.storage.GetGauge(metricName)
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(strconv.FormatFloat(val, 'f', -1, 64)))
+	case "counter":
+		val, ok := h.storage.GetCounter(metricName)
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(strconv.FormatInt(val, 10)))
+	default:
+		http.Error(w, "invalid metric type", http.StatusBadRequest)
+	}
+}
+
+func (h *Handler) HandleMetricsPage(w http.ResponseWriter, r *http.Request) {
+	metrics := h.storage.GetAll()
+
+	sort.Slice(metrics, func(i, j int) bool {
+		return metrics[i].Name < metrics[j].Name
+	})
+
+	builder := strings.Builder{}
+	builder.WriteString("<html><body><h1>Metrics</h1><ul>")
+	for _, metric := range metrics {
+		builder.WriteString("<li>" + metric.Name + ": " + metric.Value + "</li>")
+	}
+	builder.WriteString("</ul></body></html>")
+
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(builder.String()))
+}

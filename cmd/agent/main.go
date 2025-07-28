@@ -8,11 +8,20 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/go-resty/resty/v2"
 )
+
+type Metric struct {
+	Type  string
+	Value float64
+}
+
+type MetricsSender interface {
+	SendMetric(mType, mName, mValue string) error
+}
 
 type AgentState struct {
 	PollInterval   int
@@ -20,12 +29,7 @@ type AgentState struct {
 	PollCount      int64
 	Metrics        map[string]Metric
 	Rng            *rand.Rand
-	Client         *resty.Client
-}
-
-type Metric struct {
-	Type  string
-	Value float64
+	Sender         MetricsSender
 }
 
 func collectMetrics(state *AgentState) {
@@ -70,55 +74,42 @@ func sendMetrics(state *AgentState) {
 		mType := metric.Type
 		mValue := strconv.FormatFloat(metric.Value, 'f', -1, 64)
 
-		params := map[string]string{
-			"mName":  name,
-			"mType":  mType,
-			"mValue": mValue,
-		}
-		resp, err := state.Client.R().
-			SetPathParams(params).
-			SetHeader("Content-Type", "text/plain").
-			Post("/update/{mType}/{mName}/{mValue}")
-
+		err := state.Sender.SendMetric(mType, name, mValue)
 		if err != nil {
 			log.Printf("Error sending metric %s: %v", name, err)
-			continue
-		}
-		if resp.StatusCode() != http.StatusOK {
-			log.Printf("Unexpected status for %s: %d", name, resp.StatusCode())
 		}
 	}
 }
 
-type NetAddress struct {
-	Host string
-	Port int
+type RestySender struct {
+	Client *resty.Client
 }
 
-func (a NetAddress) String() string {
-	return a.Host + ":" + strconv.Itoa(a.Port)
-}
+func (rs *RestySender) SendMetric(mType, mName, mValue string) error {
+	params := map[string]string{
+		"mName":  mName,
+		"mType":  mType,
+		"mValue": mValue,
+	}
+	resp, err := rs.Client.R().
+		SetPathParams(params).
+		SetHeader("Content-Type", "text/plain").
+		Post("/update/{mType}/{mName}/{mValue}")
 
-func (a *NetAddress) Set(s string) error {
-	hp := strings.Split(s, ":")
-	a.Host = hp[0]
-	if len(hp) == 2 {
-		port, err := strconv.Atoi(hp[1])
-		if err != nil {
-			return err
-		}
-		a.Port = port
-	} else {
-		a.Port = 8080
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return fmt.Errorf("unexpected status: %d", resp.StatusCode())
 	}
 	return nil
 }
 
-func parseFlags() (*NetAddress, *AgentState) {
-	addr := &NetAddress{Host: "localhost", Port: 8080}
+func parseFlags() (*config.NetAddress, *AgentState) {
+	addr := config.ParseAddressFlag()
 	poll := flag.Int("p", 2, "Poll interval in seconds")
 	report := flag.Int("r", 10, "Report interval in seconds")
-	flag.Var(addr, "a", "Net address host:port")
+
 	flag.Parse()
 
 	state := &AgentState{
@@ -139,11 +130,13 @@ func main() {
 	fmt.Println("Report interval", state.ReportInterval)
 	fmt.Println("Poll interval", state.PollInterval)
 
-	state.Client = resty.New().
+	restyClient := resty.New().
 		SetBaseURL("http://" + addr.String()).
 		SetTimeout(5 * time.Second).
 		SetRetryCount(3).
 		SetRetryWaitTime(500 * time.Millisecond)
+
+	state.Sender = &RestySender{Client: restyClient}
 
 	pollDur := time.Duration(state.PollInterval) * time.Second
 	reportDur := time.Duration(state.ReportInterval) * time.Second

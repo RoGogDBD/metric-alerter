@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/RoGogDBD/metric-alerter/internal/handler"
+	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/go-chi/chi"
 )
 
@@ -55,14 +57,13 @@ func TestHandler_ServeHTTP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := &Handler{
-				storage: NewMemStorage(),
-			}
+			storage := repository.NewMemStorage()
+			handler := handler.NewHandler(storage)
 
 			r := chi.NewRouter()
-			r.Post("/update/{type}/{name}/{value}", handler.handleUpdate)
-			r.Get("/value/{type}/{name}", handler.handleGetMetricValue)
-			r.Get("/", handler.handleMetricsPage)
+			r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
+			r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
+			r.Get("/", handler.HandleMetricsPage)
 
 			req := httptest.NewRequest(tt.method, tt.url, nil)
 			w := httptest.NewRecorder()

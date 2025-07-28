@@ -40,7 +40,8 @@ func TestSendMetrics(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			state.Client = resty.New().SetBaseURL(ts.URL)
+			client := resty.New().SetBaseURL(ts.URL)
+			state.Sender = &RestySender{Client: client}
 
 			sendMetrics(state)
 
