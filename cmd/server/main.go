@@ -36,8 +36,12 @@ func run() error {
 
 	addr := config.ParseAddressFlag()
 	flag.Parse()
-	log.Printf("Using address: %s\n", addr.String())
 
+	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
+		return err
+	}
+
+	log.Printf("Using address: %s\n", addr.String())
 	fmt.Println("Server started")
 	return http.ListenAndServe(addr.String(), r)
 }
