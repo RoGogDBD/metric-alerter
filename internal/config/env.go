@@ -6,7 +6,11 @@ import (
 	"strconv"
 )
 
-func EnvServer(addr *NetAddress, envKey string) error {
+type AddrSetter interface {
+	Set(string) error
+}
+
+func EnvServer(addr AddrSetter, envKey string) error {
 	if envVal := os.Getenv(envKey); envVal != "" {
 		if err := addr.Set(envVal); err != nil {
 			return fmt.Errorf("invalid %s: %w", envKey, err)
