@@ -20,6 +20,11 @@ func main() {
 }
 
 func run() error {
+	if err := config.Initialize("info"); err != nil {
+		return err
+	}
+	defer config.Log.Sync()
+
 	storage := repository.NewMemStorage()
 	handler := handler.NewHandler(storage)
 
@@ -27,7 +32,7 @@ func run() error {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(config.RequestLogger)
 	r.Use(middleware.Recoverer)
 
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
