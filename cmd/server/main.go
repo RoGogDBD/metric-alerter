@@ -20,6 +20,11 @@ func main() {
 }
 
 func run() error {
+	if err := config.Initialize("info"); err != nil {
+		return err
+	}
+	defer config.Log.Sync()
+
 	storage := repository.NewMemStorage()
 	handler := handler.NewHandler(storage)
 
@@ -27,7 +32,7 @@ func run() error {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(config.RequestLogger)
 	r.Use(middleware.Recoverer)
 
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
@@ -36,8 +41,12 @@ func run() error {
 
 	addr := config.ParseAddressFlag()
 	flag.Parse()
-	log.Printf("Using address: %s\n", addr.String())
 
+	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
+		return err
+	}
+
+	log.Printf("Using address: %s\n", addr.String())
 	fmt.Println("Server started")
 	return http.ListenAndServe(addr.String(), r)
 }

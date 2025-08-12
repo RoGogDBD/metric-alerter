@@ -112,6 +112,18 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 
 	flag.Parse()
 
+	if val, err := config.EnvInt("POLL_INTERVAL"); err != nil {
+		log.Printf("%v", err)
+	} else if val != 0 {
+		*poll = val
+	}
+
+	if val, err := config.EnvInt("REPORT_INTERVAL"); err != nil {
+		log.Printf("%v", err)
+	} else if val != 0 {
+		*report = val
+	}
+
 	state := &AgentState{
 		PollInterval:   *poll,
 		ReportInterval: *report,
@@ -125,6 +137,10 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 
 func main() {
 	addr, state := parseFlags()
+
+	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
+		log.Fatalf("failed to apply env override: %v", err)
+	}
 
 	fmt.Println("Server URL", addr.String())
 	fmt.Println("Report interval", state.ReportInterval)
