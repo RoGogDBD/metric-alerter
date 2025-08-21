@@ -34,6 +34,7 @@ func run() error {
 	r.Use(middleware.RealIP)
 	r.Use(config.RequestLogger)
 	r.Use(middleware.Recoverer)
+	r.Use(config.GzipResponseMiddleware)
 
 	r.Post("/update", handler.HandleUpdateJSON)
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)

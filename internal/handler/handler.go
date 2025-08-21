@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/RoGogDBD/metric-alerter/internal/config"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/go-chi/chi"
@@ -77,12 +80,25 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var reader io.Reader = r.Body
+
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		data, err := config.GzipDecompress(r.Body)
+		if err != nil {
+			http.Error(w, "invalid gzip body", http.StatusBadRequest)
+			return
+		}
+		reader = bytes.NewReader(data)
+	}
+
 	var m models.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+	if err := json.NewDecoder(reader).Decode(&m); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+
 	if m.ID == "" || m.MType == "" {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -102,9 +103,20 @@ func (rs *RestySender) SendMetric(mType, mName string, mValue float64) error {
 		return fmt.Errorf("unsupported metric type: %s", mType)
 	}
 
+	body, err := json.Marshal(metric)
+	if err != nil {
+		return err
+	}
+
+	gzBody, err := config.GzipCompress(body)
+	if err != nil {
+		return err
+	}
+
 	resp, err := rs.Client.R().
 		SetHeader("Content-Type", "application/json").
-		SetBody(metric).
+		SetHeader("Content-Encoding", "gzip").
+		SetBody(gzBody).
 		Post("/update")
 
 	if err != nil {
