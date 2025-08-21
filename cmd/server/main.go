@@ -35,7 +35,9 @@ func run() error {
 	r.Use(config.RequestLogger)
 	r.Use(middleware.Recoverer)
 
+	r.Post("/update", handler.HandleUpdateJSON)
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
+	r.Post("/value", handler.HandleGetMetricJSON)
 	r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
 	r.Get("/", handler.HandleMetricsPage)
 

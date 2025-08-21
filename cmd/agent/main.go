@@ -7,10 +7,10 @@ import (
 	"math/rand"
 	"net/http"
 	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
+	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -20,7 +20,7 @@ type Metric struct {
 }
 
 type MetricsSender interface {
-	SendMetric(mType, mName, mValue string) error
+	SendMetric(mType, mName string, mValue float64) error
 }
 
 type AgentState struct {
@@ -71,10 +71,7 @@ func collectMetrics(state *AgentState) {
 
 func sendMetrics(state *AgentState) {
 	for name, metric := range state.Metrics {
-		mType := metric.Type
-		mValue := strconv.FormatFloat(metric.Value, 'f', -1, 64)
-
-		err := state.Sender.SendMetric(mType, name, mValue)
+		err := state.Sender.SendMetric(metric.Type, name, metric.Value)
 		if err != nil {
 			log.Printf("Error sending metric %s: %v", name, err)
 		}
@@ -85,16 +82,30 @@ type RestySender struct {
 	Client *resty.Client
 }
 
-func (rs *RestySender) SendMetric(mType, mName, mValue string) error {
-	params := map[string]string{
-		"mName":  mName,
-		"mType":  mType,
-		"mValue": mValue,
+func (rs *RestySender) SendMetric(mType, mName string, mValue float64) error {
+	var metric map[string]interface{}
+
+	switch mType {
+	case models.Gauge:
+		metric = map[string]interface{}{
+			"id":    mName,
+			"type":  mType,
+			"value": mValue,
+		}
+	case models.Counter:
+		metric = map[string]interface{}{
+			"id":    mName,
+			"type":  mType,
+			"delta": int64(mValue),
+		}
+	default:
+		return fmt.Errorf("unsupported metric type: %s", mType)
 	}
+
 	resp, err := rs.Client.R().
-		SetPathParams(params).
-		SetHeader("Content-Type", "text/plain").
-		Post("/update/{mType}/{mName}/{mValue}")
+		SetHeader("Content-Type", "application/json").
+		SetBody(metric).
+		Post("/update")
 
 	if err != nil {
 		return err
