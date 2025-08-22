@@ -21,7 +21,7 @@ func EnvServer(addr AddrSetter, envKey string) error {
 
 func EnvInt(key string) (int, error) {
 	val, ok := os.LookupEnv(key)
-	if !ok {
+	if !ok || val == "" {
 		return 0, nil
 	}
 	i, err := strconv.Atoi(val)

@@ -51,8 +51,12 @@ func TestEnvInt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Setenv(tt.envKey, tt.envValue)
-			defer os.Unsetenv(tt.envKey)
+			if tt.envValue != "" || tt.name == "empty value" {
+				os.Setenv(tt.envKey, tt.envValue)
+				defer os.Unsetenv(tt.envKey)
+			} else {
+				os.Unsetenv(tt.envKey)
+			}
 
 			got, err := EnvInt(tt.envKey)
 			if tt.wantErr {
