@@ -11,7 +11,7 @@ type AddrSetter interface {
 }
 
 func EnvServer(addr AddrSetter, envKey string) error {
-	if envVal := os.Getenv(envKey); envVal != "" {
+	if envVal, ok := os.LookupEnv(envKey); ok {
 		if err := addr.Set(envVal); err != nil {
 			return fmt.Errorf("invalid %s: %w", envKey, err)
 		}
@@ -20,8 +20,8 @@ func EnvServer(addr AddrSetter, envKey string) error {
 }
 
 func EnvInt(key string) (int, error) {
-	val := os.Getenv(key)
-	if val == "" {
+	val, ok := os.LookupEnv(key)
+	if !ok {
 		return 0, nil
 	}
 	i, err := strconv.Atoi(val)

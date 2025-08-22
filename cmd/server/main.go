@@ -22,10 +22,11 @@ func main() {
 }
 
 func run() error {
-	if err := config.Initialize("info"); err != nil {
+	logger, err := config.Initialize("info")
+	if err != nil {
 		return err
 	}
-	defer config.Log.Sync()
+	defer logger.Sync()
 
 	storeIntervalFlag := flag.Int("i", 300, "Store interval in seconds")
 	fileStorageFlag := flag.String("f", "metrics.json", "File storage path")
@@ -49,7 +50,7 @@ func run() error {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(config.RequestLogger)
+	r.Use(config.RequestLogger(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 

@@ -10,11 +10,9 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var Log *zap.Logger
-
-func Initialize(level string) error {
+func Initialize(level string) (*zap.Logger, error) {
 	if err := os.MkdirAll("./logs", 0755); err != nil {
-		return err
+		return nil, err
 	}
 	config := zap.NewProductionConfig()
 	config.OutputPaths = []string{
@@ -36,13 +34,12 @@ func Initialize(level string) error {
 	}
 	config.Level = zap.NewAtomicLevelAt(lvl)
 
-	var err error
-	Log, err = config.Build()
+	logger, err := config.Build()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return logger, nil
 }
 
 type statusRecorder struct {
@@ -62,21 +59,23 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return size, err
 }
 
-func RequestLogger(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+func RequestLogger(logger *zap.Logger) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
-		h.ServeHTTP(sr, r)
-		duration := time.Since(start)
+			h.ServeHTTP(sr, r)
+			duration := time.Since(start)
 
-		Log.Info("HTTP request",
-			zap.String("method", r.Method),
-			zap.String("url", r.RequestURI),
-			zap.Int("status", sr.status),
-			zap.Int("size", sr.size),
-			zap.Duration("duration", duration),
-			zap.String("remote_addr", r.RemoteAddr),
-		)
-	})
+			logger.Info("HTTP request",
+				zap.String("method", r.Method),
+				zap.String("url", r.RequestURI),
+				zap.Int("status", sr.status),
+				zap.Int("size", sr.size),
+				zap.Duration("duration", duration),
+				zap.String("remote_addr", r.RemoteAddr),
+			)
+		})
+	}
 }
