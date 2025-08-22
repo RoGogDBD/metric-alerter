@@ -34,10 +34,11 @@ func run() error {
 	r.Use(middleware.RealIP)
 	r.Use(config.RequestLogger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.RedirectSlashes)
 
 	r.Post("/update", handler.HandleUpdateJSON)
+	r.Post("/update/", handler.HandleUpdateJSON)
 	r.Post("/value", handler.HandleGetMetricJSON)
+	r.Post("/value/", handler.HandleGetMetricJSON)
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
 	r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
 	r.Get("/", handler.HandleMetricsPage)
