@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
+	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -86,16 +88,25 @@ type RestySender struct {
 }
 
 func (rs *RestySender) SendMetric(mType, mName, mValue string) error {
-	params := map[string]string{
-		"mName":  mName,
-		"mType":  mType,
-		"mValue": mValue,
+	var m models.Metrics
+	m.ID = mName
+	m.MType = mType
+	switch mType {
+	case "gauge":
+		val, _ := strconv.ParseFloat(mValue, 64)
+		m.Value = &val
+	case "counter":
+		delta, _ := strconv.ParseInt(mValue, 10, 64)
+		m.Delta = &delta
+	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
 	}
 	resp, err := rs.Client.R().
-		SetPathParams(params).
-		SetHeader("Content-Type", "text/plain").
-		Post("/update/{mType}/{mName}/{mValue}")
-
+		SetHeader("Content-Type", "application/json").
+		SetBody(body).
+		Post("/update")
 	if err != nil {
 		return err
 	}

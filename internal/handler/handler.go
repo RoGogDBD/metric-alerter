@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
+	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/go-chi/chi"
 )
@@ -116,4 +118,74 @@ func (h *Handler) HandleMetricsPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(builder.String()))
+}
+
+func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var m models.Metrics
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	switch m.MType {
+	case "gauge":
+		if m.Value == nil {
+			http.Error(w, "missing value for gauge", http.StatusBadRequest)
+			return
+		}
+		h.storage.SetGauge(m.ID, *m.Value)
+	case "counter":
+		if m.Delta == nil {
+			http.Error(w, "missing delta for counter", http.StatusBadRequest)
+			return
+		}
+		h.storage.AddCounter(m.ID, *m.Delta)
+	default:
+		http.Error(w, "unknown metric type", http.StatusNotImplemented)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(m)
+}
+
+func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req models.Metrics
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	resp := models.Metrics{
+		ID:    req.ID,
+		MType: req.MType,
+	}
+	switch req.MType {
+	case "gauge":
+		val, ok := h.storage.GetGauge(req.ID)
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		resp.Value = &val
+	case "counter":
+		delta, ok := h.storage.GetCounter(req.ID)
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		resp.Delta = &delta
+	default:
+		http.Error(w, "unknown metric type", http.StatusNotImplemented)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
