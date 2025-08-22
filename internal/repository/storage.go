@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"encoding/json"
+	"os"
 	"strconv"
 	"sync"
 )
@@ -85,4 +87,62 @@ func (s *MemStorage) GetAll() []MetricInfo {
 		})
 	}
 	return result
+}
+
+func (s *MemStorage) SaveToFile(path string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	data := make([]MetricUpdate, 0, len(s.gauge)+len(s.counter))
+
+	for name, val := range s.gauge {
+		data = append(data, MetricUpdate{
+			Type:     "gauge",
+			Name:     name,
+			FloatVal: &val,
+		})
+	}
+	for name, val := range s.counter {
+		data = append(data, MetricUpdate{
+			Type:   "counter",
+			Name:   name,
+			IntVal: &val,
+		})
+	}
+
+	bytes, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, bytes, 0666)
+}
+
+// Загружает метрики из JSON-файла
+func (s *MemStorage) LoadFromFile(path string) error {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var data []MetricUpdate
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range data {
+		switch m.Type {
+		case "gauge":
+			if m.FloatVal != nil {
+				s.gauge[m.Name] = *m.FloatVal
+			}
+		case "counter":
+			if m.IntVal != nil {
+				s.counter[m.Name] = *m.IntVal
+			}
+		}
+	}
+	return nil
 }

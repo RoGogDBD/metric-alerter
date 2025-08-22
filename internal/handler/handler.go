@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -17,11 +18,15 @@ import (
 )
 
 type Handler struct {
-	storage repository.Storage
+	storage  repository.Storage
+	filePath string
 }
 
 func NewHandler(storage repository.Storage) *Handler {
-	return &Handler{storage: storage}
+	return &Handler{
+		storage:  storage,
+		filePath: "metrics.json",
+	}
 }
 
 var (
@@ -76,6 +81,11 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	case models.Counter:
 		h.storage.AddCounter(metric.Name, *metric.IntVal)
 	}
+	if memStorage, ok := h.storage.(*repository.MemStorage); ok {
+		if err := memStorage.SaveToFile(h.filePath); err != nil {
+			log.Printf("failed to save metrics: %v", err)
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -122,6 +132,12 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unknown metric type", http.StatusNotImplemented)
 		return
+	}
+
+	if memStorage, ok := h.storage.(*repository.MemStorage); ok {
+		if err := memStorage.SaveToFile(h.filePath); err != nil {
+			log.Printf("failed to save metrics: %v", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

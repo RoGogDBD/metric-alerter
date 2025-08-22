@@ -26,6 +26,12 @@ func run() error {
 	defer config.Log.Sync()
 
 	storage := repository.NewMemStorage()
+	filePath := "metrics.json"
+	if memStorage, ok := storage.(*repository.MemStorage); ok {
+		if err := memStorage.LoadFromFile(filePath); err != nil {
+			log.Printf("failed to load metrics from file: %v", err)
+		}
+	}
 	handler := handler.NewHandler(storage)
 
 	r := chi.NewRouter()
