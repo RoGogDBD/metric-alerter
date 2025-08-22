@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"math/rand"
 	"net/http"
@@ -68,7 +69,17 @@ func TestSendMetrics(t *testing.T) {
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("expected Content-Type application/json, got %q", r.Header.Get("Content-Type"))
 				}
-				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				var reader = r.Body
+				if r.Header.Get("Content-Encoding") == "gzip" {
+					gz, err := gzip.NewReader(r.Body)
+					if err != nil {
+						t.Errorf("failed to create gzip reader: %v", err)
+						return
+					}
+					defer gz.Close()
+					reader = gz
+				}
+				if err := json.NewDecoder(reader).Decode(&got); err != nil {
 					t.Errorf("failed to decode body: %v", err)
 				}
 				w.WriteHeader(tc.status)
