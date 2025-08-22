@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -103,9 +105,16 @@ func (rs *RestySender) SendMetric(mType, mName, mValue string) error {
 	if err != nil {
 		return err
 	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(body); err != nil {
+		return err
+	}
+	gz.Close()
 	resp, err := rs.Client.R().
 		SetHeader("Content-Type", "application/json").
-		SetBody(body).
+		SetHeader("Content-Encoding", "gzip").
+		SetBody(buf.Bytes()).
 		Post("/update")
 	if err != nil {
 		return err

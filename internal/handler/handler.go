@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -120,13 +122,26 @@ func (h *Handler) HandleMetricsPage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(builder.String()))
 }
 
+func decodeRequestBody(r *http.Request, v interface{}) error {
+	var reader io.Reader = r.Body
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(r.Body)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+		reader = gz
+	}
+	return json.NewDecoder(reader).Decode(v)
+}
+
 func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var m models.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+	if err := decodeRequestBody(r, &m); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
@@ -158,7 +173,7 @@ func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req models.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeRequestBody(r, &req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
