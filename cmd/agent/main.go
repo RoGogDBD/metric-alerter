@@ -108,20 +108,14 @@ func (rs *RestySender) SendMetric(mType, mName string, mValue float64) error {
 		return err
 	}
 
-	gzBody, err := config.GzipCompress(body)
-	if err != nil {
-		return err
-	}
-
 	resp, err := rs.Client.R().
 		SetHeader("Content-Type", "application/json").
-		SetHeader("Content-Encoding", "gzip").
-		SetBody(gzBody).
+		SetBody(body).
 		Post("/update")
-
 	if err != nil {
 		return err
 	}
+
 	if resp.StatusCode() != http.StatusOK {
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode())
 	}
