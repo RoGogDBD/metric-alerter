@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
+	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -38,7 +42,7 @@ func collectMetrics(state *AgentState) {
 
 	state.Metrics["Alloc"] = Metric{"gauge", float64(m.Alloc)}
 	state.Metrics["BuckHashSys"] = Metric{"gauge", float64(m.BuckHashSys)}
-	state.Metrics["Frees"] = Metric{"counter", float64(m.Frees)}
+	state.Metrics["Frees"] = Metric{"gauge", float64(m.Frees)}
 	state.Metrics["GCCPUFraction"] = Metric{"gauge", m.GCCPUFraction}
 	state.Metrics["GCSys"] = Metric{"gauge", float64(m.GCSys)}
 	state.Metrics["HeapAlloc"] = Metric{"gauge", float64(m.HeapAlloc)}
@@ -48,17 +52,17 @@ func collectMetrics(state *AgentState) {
 	state.Metrics["HeapReleased"] = Metric{"gauge", float64(m.HeapReleased)}
 	state.Metrics["HeapSys"] = Metric{"gauge", float64(m.HeapSys)}
 	state.Metrics["LastGC"] = Metric{"gauge", float64(m.LastGC)}
-	state.Metrics["Lookups"] = Metric{"counter", float64(m.Lookups)}
+	state.Metrics["Lookups"] = Metric{"gauge", float64(m.Lookups)}
 	state.Metrics["MCacheInuse"] = Metric{"gauge", float64(m.MCacheInuse)}
 	state.Metrics["MCacheSys"] = Metric{"gauge", float64(m.MCacheSys)}
 	state.Metrics["MSpanInuse"] = Metric{"gauge", float64(m.MSpanInuse)}
 	state.Metrics["MSpanSys"] = Metric{"gauge", float64(m.MSpanSys)}
-	state.Metrics["Mallocs"] = Metric{"counter", float64(m.Mallocs)}
+	state.Metrics["Mallocs"] = Metric{"gauge", float64(m.Mallocs)}
 	state.Metrics["NextGC"] = Metric{"gauge", float64(m.NextGC)}
-	state.Metrics["NumForcedGC"] = Metric{"counter", float64(m.NumForcedGC)}
-	state.Metrics["NumGC"] = Metric{"counter", float64(m.NumGC)}
+	state.Metrics["NumForcedGC"] = Metric{"gauge", float64(m.NumForcedGC)}
+	state.Metrics["NumGC"] = Metric{"gauge", float64(m.NumGC)}
 	state.Metrics["OtherSys"] = Metric{"gauge", float64(m.OtherSys)}
-	state.Metrics["PauseTotalNs"] = Metric{"counter", float64(m.PauseTotalNs)}
+	state.Metrics["PauseTotalNs"] = Metric{"gauge", float64(m.PauseTotalNs)}
 	state.Metrics["StackInuse"] = Metric{"gauge", float64(m.StackInuse)}
 	state.Metrics["StackSys"] = Metric{"gauge", float64(m.StackSys)}
 	state.Metrics["Sys"] = Metric{"gauge", float64(m.Sys)}
@@ -86,16 +90,32 @@ type RestySender struct {
 }
 
 func (rs *RestySender) SendMetric(mType, mName, mValue string) error {
-	params := map[string]string{
-		"mName":  mName,
-		"mType":  mType,
-		"mValue": mValue,
+	var m models.Metrics
+	m.ID = mName
+	m.MType = mType
+	switch mType {
+	case "gauge":
+		val, _ := strconv.ParseFloat(mValue, 64)
+		m.Value = &val
+	case "counter":
+		delta, _ := strconv.ParseInt(mValue, 10, 64)
+		m.Delta = &delta
 	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(body); err != nil {
+		return err
+	}
+	gz.Close()
 	resp, err := rs.Client.R().
-		SetPathParams(params).
-		SetHeader("Content-Type", "text/plain").
-		Post("/update/{mType}/{mName}/{mValue}")
-
+		SetHeader("Content-Type", "application/json").
+		SetHeader("Content-Encoding", "gzip").
+		SetBody(buf.Bytes()).
+		Post("/update")
 	if err != nil {
 		return err
 	}
@@ -112,6 +132,18 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 
 	flag.Parse()
 
+	if val, err := config.EnvInt("POLL_INTERVAL"); err != nil {
+		log.Printf("%v", err)
+	} else if val != 0 {
+		*poll = val
+	}
+
+	if val, err := config.EnvInt("REPORT_INTERVAL"); err != nil {
+		log.Printf("%v", err)
+	} else if val != 0 {
+		*report = val
+	}
+
 	state := &AgentState{
 		PollInterval:   *poll,
 		ReportInterval: *report,
@@ -125,6 +157,10 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 
 func main() {
 	addr, state := parseFlags()
+
+	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
+		log.Fatalf("failed to apply env override: %v", err)
+	}
 
 	fmt.Println("Server URL", addr.String())
 	fmt.Println("Report interval", state.ReportInterval)

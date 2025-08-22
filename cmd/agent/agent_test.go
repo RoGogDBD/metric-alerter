@@ -1,24 +1,52 @@
 package main
 
 import (
-	"io"
+	"compress/gzip"
+	"encoding/json"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/go-resty/resty/v2"
 )
+
+func floatPtr(f float64) *float64 { return &f }
+func int64Ptr(i float64) *int64 {
+	v := int64(i)
+	return &v
+}
 
 func TestSendMetrics(t *testing.T) {
 	tests := []struct {
 		name     string
 		metric   Metric
-		expected string
+		expected models.Metrics
 		status   int
 	}{
-		{"GaugeSuccess", Metric{"gauge", 12.3}, "/update/gauge/TestMetric/12.3", http.StatusOK},
-		{"CounterSuccess", Metric{"counter", 5}, "/update/counter/TestMetric/5", http.StatusOK},
+		{
+			name:   "GaugeSuccess",
+			metric: Metric{"gauge", 12.3},
+			expected: models.Metrics{
+				ID:    "TestMetric",
+				MType: "gauge",
+				Value: floatPtr(12.3),
+				Delta: nil,
+			},
+			status: http.StatusOK,
+		},
+		{
+			name:   "CounterSuccess",
+			metric: Metric{"counter", 5},
+			expected: models.Metrics{
+				ID:    "TestMetric",
+				MType: "counter",
+				Value: nil,
+				Delta: int64Ptr(5),
+			},
+			status: http.StatusOK,
+		},
 	}
 
 	for _, tc := range tests {
@@ -31,11 +59,29 @@ func TestSendMetrics(t *testing.T) {
 				Rng:            rand.New(rand.NewSource(1)),
 			}
 
-			var actualPath string
+			var got models.Metrics
 
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				actualPath = r.URL.Path
-				io.ReadAll(r.Body)
+				defer r.Body.Close()
+				if r.URL.Path != "/update" {
+					t.Errorf("expected path /update, got %q", r.URL.Path)
+				}
+				if r.Header.Get("Content-Type") != "application/json" {
+					t.Errorf("expected Content-Type application/json, got %q", r.Header.Get("Content-Type"))
+				}
+				var reader = r.Body
+				if r.Header.Get("Content-Encoding") == "gzip" {
+					gz, err := gzip.NewReader(r.Body)
+					if err != nil {
+						t.Errorf("failed to create gzip reader: %v", err)
+						return
+					}
+					defer gz.Close()
+					reader = gz
+				}
+				if err := json.NewDecoder(reader).Decode(&got); err != nil {
+					t.Errorf("failed to decode body: %v", err)
+				}
 				w.WriteHeader(tc.status)
 			}))
 			defer ts.Close()
@@ -45,8 +91,17 @@ func TestSendMetrics(t *testing.T) {
 
 			sendMetrics(state)
 
-			if tc.expected != "" && actualPath != tc.expected {
-				t.Errorf("expected path %q, got %q", tc.expected, actualPath)
+			if got.ID != tc.expected.ID {
+				t.Errorf("expected ID %q, got %q", tc.expected.ID, got.ID)
+			}
+			if got.MType != tc.expected.MType {
+				t.Errorf("expected MType %q, got %q", tc.expected.MType, got.MType)
+			}
+			if tc.expected.Value != nil && (got.Value == nil || *got.Value != *tc.expected.Value) {
+				t.Errorf("expected Value %v, got %v", *tc.expected.Value, got.Value)
+			}
+			if tc.expected.Delta != nil && (got.Delta == nil || *got.Delta != *tc.expected.Delta) {
+				t.Errorf("expected Delta %v, got %v", *tc.expected.Delta, got.Delta)
 			}
 		})
 	}
