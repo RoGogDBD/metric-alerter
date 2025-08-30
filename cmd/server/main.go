@@ -104,6 +104,7 @@ func run() error {
 	r.Post("/value/", handler.HandleGetMetricJSON)
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
 	r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
+	r.Get("/ping", handler.HandlePing)
 	r.Get("/", handler.HandleMetricsPage)
 
 	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
