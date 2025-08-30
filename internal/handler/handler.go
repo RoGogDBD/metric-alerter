@@ -2,7 +2,6 @@ package handler
 
 import (
 	"compress/gzip"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,14 +13,15 @@ import (
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/go-chi/chi"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
 	storage repository.Storage
-	db      *sql.DB
+	db      *pgxpool.Pool
 }
 
-func NewHandler(storage repository.Storage, db *sql.DB) *Handler {
+func NewHandler(storage repository.Storage, db *pgxpool.Pool) *Handler {
 	return &Handler{storage: storage, db: db}
 }
 
@@ -212,7 +212,7 @@ func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database not configured", http.StatusInternalServerError)
 		return
 	}
-	if err := h.db.Ping(); err != nil {
+	if err := h.db.Ping(r.Context()); err != nil {
 		http.Error(w, "database not reachable: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
