@@ -2,6 +2,7 @@ package handler
 
 import (
 	"compress/gzip"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,10 +18,11 @@ import (
 
 type Handler struct {
 	storage repository.Storage
+	db      *sql.DB
 }
 
-func NewHandler(storage repository.Storage) *Handler {
-	return &Handler{storage: storage}
+func NewHandler(storage repository.Storage, db *sql.DB) *Handler {
+	return &Handler{storage: storage, db: db}
 }
 
 var (
@@ -203,4 +205,17 @@ func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		http.Error(w, "database not configured", http.StatusInternalServerError)
+		return
+	}
+	if err := h.db.Ping(); err != nil {
+		http.Error(w, "database not reachable: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }

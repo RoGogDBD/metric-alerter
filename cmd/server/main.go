@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -22,24 +23,42 @@ func main() {
 }
 
 func run() error {
-	logger, err := config.Initialize("info")
-	if err != nil {
-		return err
-	}
-	defer logger.Sync()
-
+	dsnFlag := flag.String("d", "", "PostgreSQL DSN")
 	storeIntervalFlag := flag.Int("i", 300, "Store interval in seconds")
 	fileStorageFlag := flag.String("f", "metrics.json", "File storage path")
 	restoreFlag := flag.Bool("r", true, "Restore metrics from file at startup")
 	addr := config.ParseAddressFlag()
 	flag.Parse()
 
+	dsn := repository.GetEnvOrFlagString("DATABASE_DSN", *dsnFlag)
+
+	var db *sql.DB
+	if dsn != "" {
+		var err error
+		db, err = sql.Open("pgx", dsn)
+		if err != nil {
+			return fmt.Errorf("failed to open db: %w", err)
+		}
+		if err = db.Ping(); err != nil {
+			return fmt.Errorf("failed to ping db: %w", err)
+		}
+		log.Println("Connected to PostgreSQL")
+	} else {
+		log.Println("No DSN provided, database features disabled")
+	}
+
+	logger, err := config.Initialize("info")
+	if err != nil {
+		return err
+	}
+	defer logger.Sync()
+
 	storeInterval := repository.GetEnvOrFlagInt("STORE_INTERVAL", *storeIntervalFlag)
 	fileStoragePath := repository.GetEnvOrFlagString("FILE_STORAGE_PATH", *fileStorageFlag)
 	restore := repository.GetEnvOrFlagBool("RESTORE", *restoreFlag)
 
 	storage := repository.NewMemStorage()
-	handler := handler.NewHandler(storage)
+	handler := handler.NewHandler(storage, db)
 
 	if restore {
 		if err := repository.LoadMetricsFromFile(storage, fileStoragePath); err != nil && !os.IsNotExist(err) {
@@ -85,6 +104,7 @@ func run() error {
 	r.Post("/value/", handler.HandleGetMetricJSON)
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
 	r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
+	r.Get("/ping", handler.HandlePing)
 	r.Get("/", handler.HandleMetricsPage)
 
 	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
