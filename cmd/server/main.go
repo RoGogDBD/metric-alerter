@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/RoGogDBD/metric-alerter/internal/handler"
@@ -25,8 +27,38 @@ func run() error {
 	}
 	defer config.Log.Sync()
 
+	addr := config.ParseAddressFlag()
+	dsnFlag := config.ParseDSNFlag()
+	flag.Parse()
+
+	dsn := *dsnFlag
+	if dsn == "" {
+		dsn = os.Getenv("DATABASE_DSN")
+	}
+
+	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
+		return err
+	}
+
+	var postgres *repository.Postgres
+	if dsn != "" {
+		var err error
+		postgres, err = repository.NewPostgres(dsn)
+		if err != nil {
+			return fmt.Errorf("failed to connect postgres: %w", err)
+		}
+		defer postgres.Close()
+
+		if err := postgres.Ping(context.Background()); err != nil {
+			return fmt.Errorf("database ping failed: %w", err)
+		}
+		log.Println("Postgres connected")
+	} else {
+		log.Println("Postgres DSN not provided, running without database")
+	}
+
 	storage := repository.NewMemStorage()
-	handler := handler.NewHandler(storage)
+	handler := handler.NewHandler(storage, postgres)
 
 	r := chi.NewRouter()
 
@@ -37,14 +69,8 @@ func run() error {
 
 	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
 	r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
+	r.Get("/ping", handler.HandlePing)
 	r.Get("/", handler.HandleMetricsPage)
-
-	addr := config.ParseAddressFlag()
-	flag.Parse()
-
-	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
-		return err
-	}
 
 	log.Printf("Using address: %s\n", addr.String())
 	fmt.Println("Server started")

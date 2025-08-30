@@ -1,22 +1,25 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/go-chi/chi"
 )
 
 type Handler struct {
-	storage repository.Storage
+	storage  repository.Storage
+	postgres *repository.Postgres
 }
 
-func NewHandler(storage repository.Storage) *Handler {
-	return &Handler{storage: storage}
+func NewHandler(storage repository.Storage, postgres *repository.Postgres) *Handler {
+	return &Handler{storage: storage, postgres: postgres}
 }
 
 var (
@@ -116,4 +119,16 @@ func (h *Handler) HandleMetricsPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(builder.String()))
+}
+
+func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	if err := h.postgres.Ping(ctx); err != nil {
+		http.Error(w, "database not available", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("pong"))
 }

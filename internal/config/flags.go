@@ -35,3 +35,7 @@ func ParseAddressFlag() *NetAddress {
 	flag.Var(addr, "a", "Net address host:port")
 	return addr
 }
+
+func ParseDSNFlag() *string {
+	return flag.String("d", "", "PostgreSQL DSN (overrides DATABASE_DSN)")
+}
