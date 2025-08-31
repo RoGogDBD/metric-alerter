@@ -49,6 +49,9 @@ func run() error {
 			return fmt.Errorf("failed to ping db: %w", err)
 		}
 		log.Println("Connected to PostgreSQL")
+		if err := repository.RunMigrations(dsn); err != nil {
+			return fmt.Errorf("failed to run migrations: %w", err)
+		}
 	} else {
 		log.Println("No DSN provided, database features disabled")
 	}
