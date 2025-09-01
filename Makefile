@@ -26,10 +26,9 @@ test-agent:
 
 build:
 	@echo "--- Building the server and agent ---"
-	@mkdir -p bin/server
-	@mkdir -p bin/agent
-	@go build -o bin/server/server ./$(SERVER_DIR)
-	@go build -o bin/agent/agent ./$(AGENT_DIR)
+	@mkdir -p bin
+	@go build -o bin/server ./$(SERVER_DIR)
+	@go build -o bin/agent ./$(AGENT_DIR)
 	@echo "--- Completed ---"
 
 clean:
