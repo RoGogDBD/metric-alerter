@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -164,9 +165,57 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown metric type", http.StatusNotImplemented)
 		return
 	}
+
+	if h.db != nil {
+		if err := repository.SyncToDB(r.Context(), h.storage, h.db); err != nil {
+			log.Printf("Failed to sync metrics to DB: %v", err)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(m)
+}
+
+func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var metrics []models.Metrics
+	if err := decodeRequestBody(r, &metrics); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	for _, m := range metrics {
+		switch m.MType {
+		case "gauge":
+			if m.Value == nil {
+				http.Error(w, "missing value for gauge", http.StatusBadRequest)
+				return
+			}
+			h.storage.SetGauge(m.ID, *m.Value)
+		case "counter":
+			if m.Delta == nil {
+				http.Error(w, "missing delta for counter", http.StatusBadRequest)
+				return
+			}
+			h.storage.AddCounter(m.ID, *m.Delta)
+		default:
+			http.Error(w, "unknown metric type", http.StatusNotImplemented)
+			return
+		}
+	}
+
+	if h.db != nil {
+		if err := repository.SyncToDB(r.Context(), h.storage, h.db); err != nil {
+			log.Printf("Failed to sync metrics to DB: %v", err)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(metrics)
 }
 
 func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
