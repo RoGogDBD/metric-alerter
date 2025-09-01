@@ -10,7 +10,8 @@ import (
 )
 
 func RunMigrations(dsn string) error {
-	m, err := migrate.New("file://../migrations/", dsn)
+	migrationsPath := "../../migrations"
+	m, err := migrate.New("file://"+migrationsPath, dsn)
 	if err != nil {
 		return fmt.Errorf("failed to init migrations: %v", err)
 	}

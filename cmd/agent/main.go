@@ -86,7 +86,7 @@
 			if metric.Type == "gauge" {
 				val := metric.Value
 				m.Value = &val
-			} else { // counter
+			} else {
 				delta := int64(metric.Value)
 				m.Delta = &delta
 			}
