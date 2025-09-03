@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/RoGogDBD/metric-alerter/internal/config"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -66,43 +67,45 @@ func SaveMetricsToFile(storage Storage, filePath string) error {
 }
 
 func SyncToDB(ctx context.Context, storage Storage, db *pgxpool.Pool) error {
-	metrics := storage.GetAll()
+	return config.RetryWithBackoff(ctx, func() error {
+		metrics := storage.GetAll()
 
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback(ctx)
 
-	stmt := `
-		INSERT INTO metrics (id, type, delta, value)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (id) DO UPDATE
-		SET type = EXCLUDED.type,
-		    delta = EXCLUDED.delta,
-		    value = EXCLUDED.value
-	`
+		stmt := `
+			INSERT INTO metrics (id, type, delta, value)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (id) DO UPDATE
+			SET type = EXCLUDED.type,
+				delta = EXCLUDED.delta,
+				value = EXCLUDED.value
+		`
 
-	for _, m := range metrics {
-		switch m.Type {
-		case "gauge":
-			val, _ := strconv.ParseFloat(m.Value, 64)
-			if _, err := tx.Exec(ctx, stmt, m.Name, "gauge", nil, val); err != nil {
-				return fmt.Errorf("failed to insert gauge %s: %w", m.Name, err)
-			}
-		case "counter":
-			delta, _ := strconv.ParseInt(m.Value, 10, 64)
-			if _, err := tx.Exec(ctx, stmt, m.Name, "counter", delta, nil); err != nil {
-				return fmt.Errorf("failed to insert counter %s: %w", m.Name, err)
+		for _, m := range metrics {
+			switch m.Type {
+			case "gauge":
+				val, _ := strconv.ParseFloat(m.Value, 64)
+				if _, err := tx.Exec(ctx, stmt, m.Name, "gauge", nil, val); err != nil {
+					return fmt.Errorf("failed to insert gauge %s: %w", m.Name, err)
+				}
+			case "counter":
+				delta, _ := strconv.ParseInt(m.Value, 10, 64)
+				if _, err := tx.Exec(ctx, stmt, m.Name, "counter", delta, nil); err != nil {
+					return fmt.Errorf("failed to insert counter %s: %w", m.Name, err)
+				}
 			}
 		}
-	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 func LoadMetricsFromFile(storage Storage, filePath string) error {

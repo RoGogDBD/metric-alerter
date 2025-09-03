@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
+	"github.com/RoGogDBD/metric-alerter/internal/config/db"
 	"github.com/RoGogDBD/metric-alerter/internal/handler"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/go-chi/chi"
@@ -39,18 +40,28 @@ func run() error {
 
 	dsn := repository.GetEnvOrFlagString("DATABASE_DSN", *dsnFlag)
 
-	var db *pgxpool.Pool
+	var dbPool *pgxpool.Pool
 	if dsn != "" {
-		db, err = pgxpool.New(context.Background(), dsn)
+		ctx := context.Background()
+
+		err = config.RetryWithBackoff(ctx, func() error {
+			var innerErr error
+			dbPool, innerErr = pgxpool.New(ctx, dsn)
+			if innerErr != nil {
+				return innerErr
+			}
+			return dbPool.Ping(ctx)
+		})
 		if err != nil {
-			return fmt.Errorf("failed to connect to db: %w", err)
+			return fmt.Errorf("failed to connect to db after retries: %w", err)
 		}
-		if err = db.Ping(context.Background()); err != nil {
-			return fmt.Errorf("failed to ping db: %w", err)
-		}
+
 		log.Println("Connected to PostgreSQL")
-		if err := repository.RunMigrations(dsn); err != nil {
-			return fmt.Errorf("failed to run migrations: %w", err)
+
+		if err := config.RetryWithBackoff(ctx, func() error {
+			return db.RunMigrations(dsn)
+		}); err != nil {
+			return fmt.Errorf("failed to run migrations after retries: %w", err)
 		}
 	} else {
 		log.Println("No DSN provided, database features disabled")
@@ -61,7 +72,7 @@ func run() error {
 	restore := repository.GetEnvOrFlagBool("RESTORE", *restoreFlag)
 
 	storage := repository.NewMemStorage()
-	handler := handler.NewHandler(storage, db)
+	handler := handler.NewHandler(storage, dbPool)
 
 	if restore {
 		if err := repository.LoadMetricsFromFile(storage, fileStoragePath); err != nil && !os.IsNotExist(err) {
