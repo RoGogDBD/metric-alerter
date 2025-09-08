@@ -112,9 +112,11 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	if _, err := gz.Write(body); err != nil {
-		return err
+		return fmt.Errorf("failed to write gzip: %w", err)
 	}
-	gz.Close()
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -127,7 +129,7 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 			Post("/updates/")
 
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to POST metrics batch: %w", err)
 		}
 		if resp.StatusCode() != http.StatusOK {
 			return fmt.Errorf("unexpected status: %d", resp.StatusCode())
