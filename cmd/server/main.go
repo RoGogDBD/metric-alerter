@@ -7,14 +7,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/RoGogDBD/metric-alerter/internal/config/db"
 	"github.com/RoGogDBD/metric-alerter/internal/handler"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
-	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
+	"github.com/RoGogDBD/metric-alerter/internal/service"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -42,26 +40,9 @@ func run() error {
 
 	var dbPool *pgxpool.Pool
 	if dsn != "" {
-		ctx := context.Background()
-
-		err = config.RetryWithBackoff(ctx, func() error {
-			var innerErr error
-			dbPool, innerErr = pgxpool.New(ctx, dsn)
-			if innerErr != nil {
-				return innerErr
-			}
-			return dbPool.Ping(ctx)
-		})
+		dbPool, err = db.InitDB(context.Background(), dsn)
 		if err != nil {
-			return fmt.Errorf("failed to connect to db after retries: %w", err)
-		}
-
-		log.Println("Connected to PostgreSQL")
-
-		if err := config.RetryWithBackoff(ctx, func() error {
-			return db.RunMigrations(dsn)
-		}); err != nil {
-			return fmt.Errorf("failed to run migrations after retries: %w", err)
+			return err
 		}
 	} else {
 		log.Println("No DSN provided, database features disabled")
@@ -80,47 +61,7 @@ func run() error {
 		}
 	}
 
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(config.RequestLogger(logger))
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Compress(5))
-
-	if storeInterval == 0 {
-		r.Post("/update", func(w http.ResponseWriter, r *http.Request) {
-			handler.HandleUpdateJSON(w, r)
-			if err := repository.SaveMetricsToFile(storage, fileStoragePath); err != nil {
-				log.Printf("Failed to save metrics: %v", err)
-			}
-		})
-		r.Post("/update/", func(w http.ResponseWriter, r *http.Request) {
-			handler.HandleUpdateJSON(w, r)
-			if err := repository.SaveMetricsToFile(storage, fileStoragePath); err != nil {
-				log.Printf("Failed to save metrics: %v", err)
-			}
-		})
-	} else {
-		go func() {
-			ticker := time.NewTicker(time.Duration(storeInterval) * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				if err := repository.SaveMetricsToFile(storage, fileStoragePath); err != nil {
-					log.Printf("Failed to save metrics: %v", err)
-				}
-			}
-		}()
-		r.Post("/update", handler.HandleUpdateJSON)
-		r.Post("/update/", handler.HandleUpdateJSON)
-	}
-
-	r.Post("/value", handler.HandleGetMetricJSON)
-	r.Post("/value/", handler.HandleGetMetricJSON)
-	r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
-	r.Post("/updates/", handler.HandlerUpdateBatchJSON)
-	r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
-	r.Get("/ping", handler.HandlePing)
-	r.Get("/", handler.HandleMetricsPage)
+	r := service.NewRouter(handler, storage, storeInterval, fileStoragePath, logger)
 
 	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
 		return err
