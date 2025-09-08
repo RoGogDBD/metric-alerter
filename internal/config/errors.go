@@ -40,9 +40,5 @@ func isRetriableError(err error) bool {
 			return true
 		}
 	}
-
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return false
-	}
 	return false
 }
