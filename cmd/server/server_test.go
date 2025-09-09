@@ -58,7 +58,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			storage := repository.NewMemStorage()
-			handler := handler.NewHandler(storage)
+			handler := handler.NewHandler(storage, nil)
 
 			r := chi.NewRouter()
 			r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"math/rand"
 	"net/http"
 	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
@@ -24,7 +24,7 @@ type Metric struct {
 }
 
 type MetricsSender interface {
-	SendMetric(mType, mName, mValue string) error
+	SendBatch(metrics []models.Metrics) error
 }
 
 type AgentState struct {
@@ -74,14 +74,28 @@ func collectMetrics(state *AgentState) {
 }
 
 func sendMetrics(state *AgentState) {
-	for name, metric := range state.Metrics {
-		mType := metric.Type
-		mValue := strconv.FormatFloat(metric.Value, 'f', -1, 64)
+	if len(state.Metrics) == 0 {
+		return
+	}
 
-		err := state.Sender.SendMetric(mType, name, mValue)
-		if err != nil {
-			log.Printf("Error sending metric %s: %v", name, err)
+	var batch []models.Metrics
+	for name, metric := range state.Metrics {
+		m := models.Metrics{
+			ID:    name,
+			MType: metric.Type,
 		}
+		if metric.Type == "gauge" {
+			val := metric.Value
+			m.Value = &val
+		} else {
+			delta := int64(metric.Value)
+			m.Delta = &delta
+		}
+		batch = append(batch, m)
+	}
+
+	if err := state.Sender.SendBatch(batch); err != nil {
+		log.Printf("Failed to send metrics batch: %v", err)
 	}
 }
 
@@ -89,40 +103,39 @@ type RestySender struct {
 	Client *resty.Client
 }
 
-func (rs *RestySender) SendMetric(mType, mName, mValue string) error {
-	var m models.Metrics
-	m.ID = mName
-	m.MType = mType
-	switch mType {
-	case "gauge":
-		val, _ := strconv.ParseFloat(mValue, 64)
-		m.Value = &val
-	case "counter":
-		delta, _ := strconv.ParseInt(mValue, 10, 64)
-		m.Delta = &delta
-	}
-	body, err := json.Marshal(m)
+func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
+	body, err := json.Marshal(metrics)
 	if err != nil {
 		return err
 	}
+
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	if _, err := gz.Write(body); err != nil {
-		return err
+		return fmt.Errorf("failed to write gzip: %w", err)
 	}
-	gz.Close()
-	resp, err := rs.Client.R().
-		SetHeader("Content-Type", "application/json").
-		SetHeader("Content-Encoding", "gzip").
-		SetBody(buf.Bytes()).
-		Post("/update")
-	if err != nil {
-		return err
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
-	if resp.StatusCode() != http.StatusOK {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode())
-	}
-	return nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	return config.RetryWithBackoff(ctx, func() error {
+		resp, err := rs.Client.R().
+			SetHeader("Content-Type", "application/json").
+			SetHeader("Content-Encoding", "gzip").
+			SetBody(buf.Bytes()).
+			Post("/updates/")
+
+		if err != nil {
+			return fmt.Errorf("failed to POST metrics batch: %w", err)
+		}
+		if resp.StatusCode() != http.StatusOK {
+			return fmt.Errorf("unexpected status: %d", resp.StatusCode())
+		}
+		return nil
+	})
 }
 
 func parseFlags() (*config.NetAddress, *AgentState) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -13,14 +14,16 @@ import (
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/go-chi/chi"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
 	storage repository.Storage
+	db      *pgxpool.Pool
 }
 
-func NewHandler(storage repository.Storage) *Handler {
-	return &Handler{storage: storage}
+func NewHandler(storage repository.Storage, db *pgxpool.Pool) *Handler {
+	return &Handler{storage: storage, db: db}
 }
 
 var (
@@ -162,9 +165,57 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown metric type", http.StatusNotImplemented)
 		return
 	}
+
+	if h.db != nil {
+		if err := repository.SyncToDB(r.Context(), h.storage, h.db); err != nil {
+			log.Printf("Failed to sync metrics to DB: %v", err)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(m)
+}
+
+func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var metrics []models.Metrics
+	if err := decodeRequestBody(r, &metrics); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	for _, m := range metrics {
+		switch m.MType {
+		case "gauge":
+			if m.Value == nil {
+				http.Error(w, "missing value for gauge", http.StatusBadRequest)
+				return
+			}
+			h.storage.SetGauge(m.ID, *m.Value)
+		case "counter":
+			if m.Delta == nil {
+				http.Error(w, "missing delta for counter", http.StatusBadRequest)
+				return
+			}
+			h.storage.AddCounter(m.ID, *m.Delta)
+		default:
+			http.Error(w, "unknown metric type", http.StatusNotImplemented)
+			return
+		}
+	}
+
+	if h.db != nil {
+		if err := repository.SyncToDB(r.Context(), h.storage, h.db); err != nil {
+			log.Printf("Failed to sync metrics to DB: %v", err)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(metrics)
 }
 
 func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
@@ -203,4 +254,17 @@ func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		http.Error(w, "database not configured", http.StatusInternalServerError)
+		return
+	}
+	if err := h.db.Ping(r.Context()); err != nil {
+		http.Error(w, "database not reachable: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }

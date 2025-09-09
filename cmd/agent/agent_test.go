@@ -59,16 +59,18 @@ func TestSendMetrics(t *testing.T) {
 				Rng:            rand.New(rand.NewSource(1)),
 			}
 
-			var got models.Metrics
+			var got []models.Metrics
 
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer r.Body.Close()
-				if r.URL.Path != "/update" {
-					t.Errorf("expected path /update, got %q", r.URL.Path)
+
+				if r.URL.Path != "/updates/" {
+					t.Errorf("expected path /updates/, got %q", r.URL.Path)
 				}
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("expected Content-Type application/json, got %q", r.Header.Get("Content-Type"))
 				}
+
 				var reader = r.Body
 				if r.Header.Get("Content-Encoding") == "gzip" {
 					gz, err := gzip.NewReader(r.Body)
@@ -91,17 +93,23 @@ func TestSendMetrics(t *testing.T) {
 
 			sendMetrics(state)
 
-			if got.ID != tc.expected.ID {
-				t.Errorf("expected ID %q, got %q", tc.expected.ID, got.ID)
+			if len(got) == 0 {
+				t.Fatalf("no metrics were sent")
 			}
-			if got.MType != tc.expected.MType {
-				t.Errorf("expected MType %q, got %q", tc.expected.MType, got.MType)
+
+			metricSent := got[0]
+
+			if metricSent.ID != tc.expected.ID {
+				t.Errorf("expected ID %q, got %q", tc.expected.ID, metricSent.ID)
 			}
-			if tc.expected.Value != nil && (got.Value == nil || *got.Value != *tc.expected.Value) {
-				t.Errorf("expected Value %v, got %v", *tc.expected.Value, got.Value)
+			if metricSent.MType != tc.expected.MType {
+				t.Errorf("expected MType %q, got %q", tc.expected.MType, metricSent.MType)
 			}
-			if tc.expected.Delta != nil && (got.Delta == nil || *got.Delta != *tc.expected.Delta) {
-				t.Errorf("expected Delta %v, got %v", *tc.expected.Delta, got.Delta)
+			if tc.expected.Value != nil && (metricSent.Value == nil || *metricSent.Value != *tc.expected.Value) {
+				t.Errorf("expected Value %v, got %v", *tc.expected.Value, metricSent.Value)
+			}
+			if tc.expected.Delta != nil && (metricSent.Delta == nil || *metricSent.Delta != *tc.expected.Delta) {
+				t.Errorf("expected Delta %v, got %v", *tc.expected.Delta, metricSent.Delta)
 			}
 		})
 	}
