@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -34,6 +37,7 @@ type AgentState struct {
 	Metrics        map[string]Metric
 	Rng            *rand.Rand
 	Sender         MetricsSender
+	Key            string
 }
 
 func collectMetrics(state *AgentState) {
@@ -101,6 +105,7 @@ func sendMetrics(state *AgentState) {
 
 type RestySender struct {
 	Client *resty.Client
+	Key    string
 }
 
 func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
@@ -122,12 +127,17 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	defer cancel()
 
 	return config.RetryWithBackoff(ctx, func() error {
-		resp, err := rs.Client.R().
+		req := rs.Client.R().
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
-			SetBody(buf.Bytes()).
-			Post("/updates/")
+			SetBody(buf.Bytes())
 
+		if rs.Key != "" {
+			hash := computeHash(buf.Bytes(), rs.Key)
+			req.SetHeader("HashSHA256", hash)
+		}
+
+		resp, err := req.Post("/updates/")
 		if err != nil {
 			return fmt.Errorf("failed to POST metrics batch: %w", err)
 		}
@@ -138,10 +148,17 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	})
 }
 
+func computeHash(data []byte, key string) string {
+	h := hmac.New(sha256.New, []byte(key))
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func parseFlags() (*config.NetAddress, *AgentState) {
 	addr := config.ParseAddressFlag()
 	poll := flag.Int("p", 2, "Poll interval in seconds")
 	report := flag.Int("r", 10, "Report interval in seconds")
+	key := flag.String("k", "", "Key for signing requests")
 
 	flag.Parse()
 
@@ -157,12 +174,18 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 		*report = val
 	}
 
+	keyValue := config.EnvString("KEY")
+	if keyValue == "" {
+		keyValue = *key
+	}
+
 	state := &AgentState{
 		PollInterval:   *poll,
 		ReportInterval: *report,
 		PollCount:      0,
 		Metrics:        make(map[string]Metric),
 		Rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
+		Key:            keyValue,
 	}
 
 	return addr, state
@@ -185,7 +208,7 @@ func main() {
 		SetRetryCount(3).
 		SetRetryWaitTime(500 * time.Millisecond)
 
-	state.Sender = &RestySender{Client: restyClient}
+	state.Sender = &RestySender{Client: restyClient, Key: state.Key}
 
 	pollDur := time.Duration(state.PollInterval) * time.Second
 	reportDur := time.Duration(state.ReportInterval) * time.Second
