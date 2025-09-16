@@ -1,7 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"compress/gzip"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,10 +24,50 @@ import (
 type Handler struct {
 	storage repository.Storage
 	db      *pgxpool.Pool
+	key     string
 }
 
 func NewHandler(storage repository.Storage, db *pgxpool.Pool) *Handler {
 	return &Handler{storage: storage, db: db}
+}
+
+func (h *Handler) SetKey(key string) {
+	h.key = key
+}
+
+func (h *Handler) computeHash(data []byte) string {
+	hash := hmac.New(sha256.New, []byte(h.key))
+	hash.Write(data)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func (h *Handler) verifyHash(body []byte, receivedHash string) bool {
+	if h.key == "" {
+		return true
+	}
+	if receivedHash == "" {
+		return false
+	}
+	expectedHash := h.computeHash(body)
+	return receivedHash == expectedHash
+}
+
+func (h *Handler) writeJSONWithHash(w http.ResponseWriter, data interface{}) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	body, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	if h.key != "" {
+		hash := h.computeHash(body)
+		w.Header().Set("HashSHA256", hash)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(body)
+	return err
 }
 
 var (
@@ -143,6 +187,20 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	receivedHash := r.Header.Get("HashSHA256")
+	if !h.verifyHash(body, receivedHash) {
+		http.Error(w, "invalid signature", http.StatusBadRequest)
+		return
+	}
+
 	var m models.Metrics
 	if err := decodeRequestBody(r, &m); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -172,9 +230,9 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(m)
+	if err := h.writeJSONWithHash(w, m); err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
 }
 
 func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request) {
@@ -182,6 +240,20 @@ func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	receivedHash := r.Header.Get("HashSHA256")
+	if !h.verifyHash(body, receivedHash) {
+		http.Error(w, "invalid signature", http.StatusBadRequest)
+		return
+	}
+
 	var metrics []models.Metrics
 	if err := decodeRequestBody(r, &metrics); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -213,9 +285,9 @@ func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(metrics)
+	if err := h.writeJSONWithHash(w, metrics); err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
 }
 
 func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
@@ -251,9 +323,9 @@ func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown metric type", http.StatusNotImplemented)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	if err := h.writeJSONWithHash(w, resp); err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
 }
 
 func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request) {

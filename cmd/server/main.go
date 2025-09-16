@@ -33,10 +33,12 @@ func run() error {
 	storeIntervalFlag := flag.Int("i", 300, "Store interval in seconds")
 	fileStorageFlag := flag.String("f", "metrics.json", "File storage path")
 	restoreFlag := flag.Bool("r", true, "Restore metrics from file at startup")
+	keyFlag := flag.String("k", "", "Key for request signing verification")
 	addr := config.ParseAddressFlag()
 	flag.Parse()
 
 	dsn := repository.GetEnvOrFlagString("DATABASE_DSN", *dsnFlag)
+	key := repository.GetEnvOrFlagString("KEY", *keyFlag)
 
 	var dbPool *pgxpool.Pool
 	if dsn != "" {
@@ -54,6 +56,7 @@ func run() error {
 
 	storage := repository.NewMemStorage()
 	handler := handler.NewHandler(storage, dbPool)
+	handler.SetKey(key)
 
 	if restore {
 		if err := repository.LoadMetricsFromFile(storage, fileStoragePath); err != nil && !os.IsNotExist(err) {
