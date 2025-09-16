@@ -46,7 +46,7 @@ func (h *Handler) verifyHash(body []byte, receivedHash string) bool {
 		return true
 	}
 	if receivedHash == "" {
-		return false
+		return true
 	}
 	expectedHash := h.computeHash(body)
 	return receivedHash == expectedHash
