@@ -14,11 +14,14 @@ import (
 	"math/rand"
 	"net/http"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/go-resty/resty/v2"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 type Metric struct {
@@ -38,12 +41,16 @@ type AgentState struct {
 	Rng            *rand.Rand
 	Sender         MetricsSender
 	Key            string
+	mu             sync.RWMutex
+	RateLimit      int
+	jobQueue       chan []models.Metrics
 }
 
 func collectMetrics(state *AgentState) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
+	state.mu.Lock()
 	state.Metrics["Alloc"] = Metric{"gauge", float64(m.Alloc)}
 	state.Metrics["BuckHashSys"] = Metric{"gauge", float64(m.BuckHashSys)}
 	state.Metrics["Frees"] = Metric{"gauge", float64(m.Frees)}
@@ -73,16 +80,35 @@ func collectMetrics(state *AgentState) {
 	state.Metrics["TotalAlloc"] = Metric{"gauge", float64(m.TotalAlloc)}
 	state.Metrics["PollCount"] = Metric{"counter", float64(state.PollCount)}
 	state.Metrics["RandomValue"] = Metric{"gauge", state.Rng.Float64() * 100}
-
 	state.PollCount++
+	state.mu.Unlock()
 }
 
-func sendMetrics(state *AgentState) {
-	if len(state.Metrics) == 0 {
-		return
+func collectSystemMetrics(state *AgentState) {
+	vm, err := mem.VirtualMemory()
+	if err == nil {
+		state.mu.Lock()
+		state.Metrics["TotalMemory"] = Metric{"gauge", float64(vm.Total)}
+		state.Metrics["FreeMemory"] = Metric{"gauge", float64(vm.Free)}
+		state.mu.Unlock()
 	}
 
-	var batch []models.Metrics
+	// per-CPU utilization (percent)
+	if percents, err := cpu.Percent(0, true); err == nil {
+		state.mu.Lock()
+		for i, p := range percents {
+			key := fmt.Sprintf("CPUutilization%d", i+1)
+			state.Metrics[key] = Metric{"gauge", p}
+		}
+		state.mu.Unlock()
+	}
+}
+
+func buildBatchSnapshot(state *AgentState) []models.Metrics {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	batch := make([]models.Metrics, 0, len(state.Metrics))
 	for name, metric := range state.Metrics {
 		m := models.Metrics{
 			ID:    name,
@@ -97,9 +123,33 @@ func sendMetrics(state *AgentState) {
 		}
 		batch = append(batch, m)
 	}
+	return batch
+}
 
+func sendMetrics(state *AgentState) {
+	batch := buildBatchSnapshot(state)
+	if len(batch) == 0 {
+		return
+	}
 	if err := state.Sender.SendBatch(batch); err != nil {
 		log.Printf("Failed to send metrics batch: %v", err)
+	}
+}
+
+func startWorkerPool(state *AgentState) {
+	if state.RateLimit <= 0 {
+		state.RateLimit = 1
+	}
+	state.jobQueue = make(chan []models.Metrics, state.RateLimit*2)
+
+	for i := 0; i < state.RateLimit; i++ {
+		go func(id int) {
+			for batch := range state.jobQueue {
+				if err := state.Sender.SendBatch(batch); err != nil {
+					log.Printf("worker %d: send error: %v", id, err)
+				}
+			}
+		}(i + 1)
 	}
 }
 
@@ -159,19 +209,18 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 	poll := flag.Int("p", 2, "Poll interval in seconds")
 	report := flag.Int("r", 10, "Report interval in seconds")
 	key := flag.String("k", "", "Key for signing requests")
+	limit := flag.Int("l", 1, "Rate limit (max concurrent outgoing requests)")
 
 	flag.Parse()
 
-	if val, err := config.EnvInt("POLL_INTERVAL"); err != nil {
-		log.Printf("%v", err)
-	} else if val != 0 {
+	if val, err := config.EnvInt("POLL_INTERVAL"); err == nil && val != 0 {
 		*poll = val
 	}
-
-	if val, err := config.EnvInt("REPORT_INTERVAL"); err != nil {
-		log.Printf("%v", err)
-	} else if val != 0 {
+	if val, err := config.EnvInt("REPORT_INTERVAL"); err == nil && val != 0 {
 		*report = val
+	}
+	if val, err := config.EnvInt("RATE_LIMIT"); err == nil && val != 0 {
+		*limit = val
 	}
 
 	keyValue := config.EnvString("KEY")
@@ -186,6 +235,7 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 		Metrics:        make(map[string]Metric),
 		Rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
 		Key:            keyValue,
+		RateLimit:      *limit,
 	}
 
 	return addr, state
@@ -210,20 +260,32 @@ func main() {
 
 	state.Sender = &RestySender{Client: restyClient, Key: state.Key}
 
-	pollDur := time.Duration(state.PollInterval) * time.Second
-	reportDur := time.Duration(state.ReportInterval) * time.Second
+	startWorkerPool(state)
 
-	pollTicker := time.NewTicker(pollDur)
-	reportTicker := time.NewTicker(reportDur)
-	defer pollTicker.Stop()
+	go func(pollSec int) {
+		t := time.NewTicker(time.Duration(pollSec) * time.Second)
+		defer t.Stop()
+		for range t.C {
+			collectMetrics(state)
+		}
+	}(state.PollInterval)
+
+	go func(pollSec int) {
+		t := time.NewTicker(time.Duration(pollSec) * time.Second)
+		defer t.Stop()
+		for range t.C {
+			collectSystemMetrics(state)
+		}
+	}(state.PollInterval)
+
+	reportTicker := time.NewTicker(time.Duration(state.ReportInterval) * time.Second)
 	defer reportTicker.Stop()
 
-	for {
-		select {
-		case <-pollTicker.C:
-			collectMetrics(state)
-		case <-reportTicker.C:
-			sendMetrics(state)
+	for range reportTicker.C {
+		batch := buildBatchSnapshot(state)
+		if len(batch) == 0 {
+			continue
 		}
+		state.jobQueue <- batch
 	}
 }
