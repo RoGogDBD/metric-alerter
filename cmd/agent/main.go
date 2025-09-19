@@ -33,17 +33,25 @@ type MetricsSender interface {
 	SendBatch(metrics []models.Metrics) error
 }
 
-type AgentState struct {
+type Config struct {
 	PollInterval   int
 	ReportInterval int
-	PollCount      int64
-	Metrics        map[string]Metric
-	Rng            *rand.Rand
-	Sender         MetricsSender
-	Key            string
-	mu             sync.RWMutex
 	RateLimit      int
-	jobQueue       chan []models.Metrics
+	Key            string
+}
+
+type MetricsCollector struct {
+	metrics   map[string]Metric
+	pollCount int64
+	rng       *rand.Rand
+	mu        sync.RWMutex
+}
+
+type AgentState struct {
+	Config    Config
+	Collector *MetricsCollector
+	Sender    MetricsSender
+	jobQueue  chan []models.Metrics
 }
 
 func collectMetrics(state *AgentState) {
@@ -80,43 +88,46 @@ func collectMetrics(state *AgentState) {
 		"TotalAlloc":    float64(m.TotalAlloc),
 	}
 
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.Collector.mu.Lock()
+	defer state.Collector.mu.Unlock()
 
 	for k, v := range metrics {
-		state.Metrics[k] = Metric{"gauge", v}
+		state.Collector.metrics[k] = Metric{"gauge", v}
 	}
 
-	state.PollCount++
-	state.Metrics["PollCount"] = Metric{"counter", float64(state.PollCount)}
-	state.Metrics["RandomValue"] = Metric{"gauge", state.Rng.Float64() * 100}
+	state.Collector.pollCount++
+	state.Collector.metrics["PollCount"] = Metric{"counter", float64(state.Collector.pollCount)}
+	state.Collector.metrics["RandomValue"] = Metric{"gauge", state.Collector.rng.Float64() * 100}
 }
 
-func collectSystemMetrics(state *AgentState) {
-	vm, err := mem.VirtualMemory()
-	if err == nil {
-		state.mu.Lock()
-		state.Metrics["TotalMemory"] = Metric{"gauge", float64(vm.Total)}
-		state.Metrics["FreeMemory"] = Metric{"gauge", float64(vm.Free)}
-		state.mu.Unlock()
+func (c *MetricsCollector) collectSystemMetrics() {
+	updates := make(map[string]Metric)
+
+	if vm, err := mem.VirtualMemory(); err == nil {
+		updates["TotalMemory"] = Metric{"gauge", float64(vm.Total)}
+		updates["FreeMemory"] = Metric{"gauge", float64(vm.Free)}
 	}
 
 	if percents, err := cpu.Percent(0, true); err == nil {
-		state.mu.Lock()
 		for i, p := range percents {
 			key := fmt.Sprintf("CPUutilization%d", i+1)
-			state.Metrics[key] = Metric{"gauge", p}
+			updates[key] = Metric{"gauge", p}
 		}
-		state.mu.Unlock()
 	}
+
+	c.mu.Lock()
+	for k, v := range updates {
+		c.metrics[k] = v
+	}
+	c.mu.Unlock()
 }
 
 func buildBatchSnapshot(state *AgentState) []models.Metrics {
-	state.mu.RLock()
-	defer state.mu.RUnlock()
+	state.Collector.mu.RLock()
+	defer state.Collector.mu.RUnlock()
 
-	batch := make([]models.Metrics, 0, len(state.Metrics))
-	for name, metric := range state.Metrics {
+	batch := make([]models.Metrics, 0, len(state.Collector.metrics))
+	for name, metric := range state.Collector.metrics {
 		m := models.Metrics{
 			ID:    name,
 			MType: metric.Type,
@@ -144,12 +155,13 @@ func sendMetrics(state *AgentState) {
 }
 
 func startWorkerPool(state *AgentState) {
-	if state.RateLimit <= 0 {
-		state.RateLimit = 1
+	if state.Config.RateLimit <= 0 {
+		state.Config.RateLimit = 1
 	}
-	state.jobQueue = make(chan []models.Metrics, state.RateLimit*2)
 
-	for i := 0; i < state.RateLimit; i++ {
+	state.jobQueue = make(chan []models.Metrics)
+
+	for i := 0; i < state.Config.RateLimit; i++ {
 		go func(id int) {
 			for batch := range state.jobQueue {
 				if err := state.Sender.SendBatch(batch); err != nil {
@@ -190,7 +202,7 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 			SetBody(buf.Bytes())
 
 		if rs.Key != "" {
-			hash := computeHash(buf.Bytes(), rs.Key)
+			hash := computeHMACSHA256(buf.Bytes(), rs.Key)
 			req.SetHeader("HashSHA256", hash)
 		}
 
@@ -205,7 +217,7 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	})
 }
 
-func computeHash(data []byte, key string) string {
+func computeHMACSHA256(data []byte, key string) string {
 	h := hmac.New(sha256.New, []byte(key))
 	h.Write(data)
 	return hex.EncodeToString(h.Sum(nil))
@@ -235,14 +247,22 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 		keyValue = *key
 	}
 
-	state := &AgentState{
+	config := Config{
 		PollInterval:   *poll,
 		ReportInterval: *report,
-		PollCount:      0,
-		Metrics:        make(map[string]Metric),
-		Rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
-		Key:            keyValue,
 		RateLimit:      *limit,
+		Key:            keyValue,
+	}
+
+	collector := &MetricsCollector{
+		metrics:   make(map[string]Metric),
+		pollCount: 0,
+		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+
+	state := &AgentState{
+		Config:    config,
+		Collector: collector,
 	}
 
 	return addr, state
@@ -256,8 +276,8 @@ func main() {
 	}
 
 	fmt.Println("Server URL", addr.String())
-	fmt.Println("Report interval", state.ReportInterval)
-	fmt.Println("Poll interval", state.PollInterval)
+	fmt.Println("Report interval", state.Config.ReportInterval)
+	fmt.Println("Poll interval", state.Config.PollInterval)
 
 	restyClient := resty.New().
 		SetBaseURL("http://" + addr.String()).
@@ -265,7 +285,10 @@ func main() {
 		SetRetryCount(3).
 		SetRetryWaitTime(500 * time.Millisecond)
 
-	state.Sender = &RestySender{Client: restyClient, Key: state.Key}
+	state.Sender = &RestySender{
+		Client: restyClient,
+		Key:    state.Config.Key,
+	}
 
 	startWorkerPool(state)
 
@@ -275,17 +298,17 @@ func main() {
 		for range t.C {
 			collectMetrics(state)
 		}
-	}(state.PollInterval)
+	}(state.Config.PollInterval)
 
 	go func(pollSec int) {
 		t := time.NewTicker(time.Duration(pollSec) * time.Second)
 		defer t.Stop()
 		for range t.C {
-			collectSystemMetrics(state)
+			state.Collector.collectSystemMetrics()
 		}
-	}(state.PollInterval)
+	}(state.Config.PollInterval)
 
-	reportTicker := time.NewTicker(time.Duration(state.ReportInterval) * time.Second)
+	reportTicker := time.NewTicker(time.Duration(state.Config.ReportInterval) * time.Second)
 	defer reportTicker.Stop()
 
 	for range reportTicker.C {
