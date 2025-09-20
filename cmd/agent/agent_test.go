@@ -51,12 +51,22 @@ func TestSendMetrics(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			state := &AgentState{
+			config := Config{
 				PollInterval:   2,
 				ReportInterval: 10,
-				PollCount:      0,
-				Metrics:        map[string]Metric{"TestMetric": tc.metric},
-				Rng:            rand.New(rand.NewSource(1)),
+				RateLimit:      1,
+				Key:            "",
+			}
+
+			collector := &MetricsCollector{
+				metrics:   map[string]Metric{"TestMetric": tc.metric},
+				pollCount: 0,
+				rng:       rand.New(rand.NewSource(1)),
+			}
+
+			state := &AgentState{
+				Config:    config,
+				Collector: collector,
 			}
 
 			var got []models.Metrics

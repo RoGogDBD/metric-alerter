@@ -30,3 +30,10 @@ func EnvInt(key string) (int, error) {
 	}
 	return i, nil
 }
+
+func EnvString(key string) string {
+	if val, ok := os.LookupEnv(key); ok && val != "" {
+		return val
+	}
+	return ""
+}
