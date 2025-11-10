@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
@@ -22,9 +23,10 @@ import (
 )
 
 type Handler struct {
-	storage repository.Storage
-	db      *pgxpool.Pool
-	key     string
+	storage      repository.Storage
+	db           *pgxpool.Pool
+	key          string
+	auditManager models.AuditSubject
 }
 
 func NewHandler(storage repository.Storage, db *pgxpool.Pool) *Handler {
@@ -33,6 +35,34 @@ func NewHandler(storage repository.Storage, db *pgxpool.Pool) *Handler {
 
 func (h *Handler) SetKey(key string) {
 	h.key = key
+}
+
+func (h *Handler) SetAuditManager(manager models.AuditSubject) {
+	h.auditManager = manager
+}
+
+func (h *Handler) getClientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return strings.Split(ip, ",")[0]
+	}
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	return strings.Split(r.RemoteAddr, ":")[0]
+}
+
+func (h *Handler) sendAuditEvent(r *http.Request, metricNames []string) {
+	if h.auditManager == nil {
+		return
+	}
+
+	event := models.AuditEvent{
+		Timestamp: time.Now().Unix(),
+		Metrics:   metricNames,
+		IPAddress: h.getClientIP(r),
+	}
+
+	h.auditManager.Notify(event)
 }
 
 func (h *Handler) computeHash(data []byte) string {
@@ -72,7 +102,6 @@ func (h *Handler) writeJSONWithHash(w http.ResponseWriter, data interface{}) err
 
 var (
 	ErrUnknownMetricType = errors.New("unknown metric type")
-	ErrInvalidValue      = errors.New("invalid value for metric type")
 )
 
 func ValidateMetricInput(metricType, metricName, metricValue string) (*repository.MetricUpdate, error) {
@@ -116,12 +145,24 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
+
 	switch metric.Type {
 	case "gauge":
 		h.storage.SetGauge(metric.Name, *metric.FloatVal)
 	case "counter":
 		h.storage.AddCounter(metric.Name, *metric.IntVal)
 	}
+
+	if h.db != nil {
+		if err := repository.SyncToDB(r.Context(), h.storage, h.db); err != nil {
+			log.Printf("Failed to sync metrics to DB: %v", err)
+			http.Error(w, "failed to save metrics", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	h.sendAuditEvent(r, []string{metricName})
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -150,7 +191,7 @@ func (h *Handler) HandleGetMetricValue(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) HandleMetricsPage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleMetricsPage(w http.ResponseWriter, _ *http.Request) {
 	metrics := h.storage.GetAll()
 
 	sort.Slice(metrics, func(i, j int) bool {
@@ -182,6 +223,7 @@ func decodeRequestBody(r *http.Request, v interface{}) error {
 	return json.NewDecoder(reader).Decode(v)
 }
 
+// HandleGetMetricJSON обрабатывает POST /value/ endpoint для получения значения метрики в формате JSON.
 func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -206,6 +248,7 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+
 	switch m.MType {
 	case "gauge":
 		if m.Value == nil {
@@ -227,14 +270,21 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 	if h.db != nil {
 		if err := repository.SyncToDB(r.Context(), h.storage, h.db); err != nil {
 			log.Printf("Failed to sync metrics to DB: %v", err)
+			http.Error(w, "failed to save metrics", http.StatusInternalServerError)
+			return
 		}
 	}
 
 	if err := h.writeJSONWithHash(w, m); err != nil {
 		log.Printf("Failed to write response: %v", err)
+		http.Error(w, "failed to write response", http.StatusInternalServerError)
+		return
 	}
+
+	h.sendAuditEvent(r, []string{m.ID})
 }
 
+// HandleGetMetricJSON обрабатывает запросы на получение метрик в формате JSON.
 func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -259,6 +309,7 @@ func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+
 	for _, m := range metrics {
 		switch m.MType {
 		case "gauge":
@@ -282,14 +333,26 @@ func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request)
 	if h.db != nil {
 		if err := repository.SyncToDB(r.Context(), h.storage, h.db); err != nil {
 			log.Printf("Failed to sync metrics to DB: %v", err)
+			http.Error(w, "failed to save metrics", http.StatusInternalServerError)
+			return
 		}
 	}
 
 	if err := h.writeJSONWithHash(w, metrics); err != nil {
 		log.Printf("Failed to write response: %v", err)
+		http.Error(w, "failed to write response", http.StatusInternalServerError)
+		return
 	}
+
+	metricNames := make([]string, len(metrics))
+	for i, m := range metrics {
+		metricNames[i] = m.ID
+	}
+
+	h.sendAuditEvent(r, metricNames)
 }
 
+// HandleGetMetricJSON обрабатывает POST-запросы для получения сведений о показателях в формате JSON на основе предоставленного текста запроса.
 func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/RoGogDBD/metric-alerter/internal/config/db"
@@ -34,11 +35,33 @@ func run() error {
 	fileStorageFlag := flag.String("f", "metrics.json", "File storage path")
 	restoreFlag := flag.Bool("r", true, "Restore metrics from file at startup")
 	keyFlag := flag.String("k", "", "Key for request signing verification")
+	auditFileFlag := flag.String("audit-file", "", "Path to audit log file")
+	auditURLFlag := flag.String("audit-url", "", "URL for remote audit server")
 	addr := config.ParseAddressFlag()
 	flag.Parse()
 
 	dsn := repository.GetEnvOrFlagString("DATABASE_DSN", *dsnFlag)
 	key := repository.GetEnvOrFlagString("KEY", *keyFlag)
+	auditFile := repository.GetEnvOrFlagString("AUDIT_FILE", *auditFileFlag)
+	auditURL := repository.GetEnvOrFlagString("AUDIT_URL", *auditURLFlag)
+
+	auditManager := repository.NewAuditManager()
+	if auditFile != "" {
+		if !filepath.IsAbs(auditFile) {
+			if wd, err := os.Getwd(); err == nil {
+				auditFile = filepath.Join(wd, auditFile)
+			}
+		}
+
+		fileObserver := repository.NewFileAuditObserver(auditFile)
+		auditManager.Attach(fileObserver)
+		log.Printf("Audit file observer enabled: %s", auditFile)
+	}
+	if auditURL != "" {
+		httpObserver := repository.NewHTTPAuditObserver(auditURL)
+		auditManager.Attach(httpObserver)
+		log.Printf("Audit HTTP observer enabled: %s", auditURL)
+	}
 
 	var dbPool *pgxpool.Pool
 	if dsn != "" {
@@ -57,6 +80,7 @@ func run() error {
 	storage := repository.NewMemStorage()
 	handler := handler.NewHandler(storage, dbPool)
 	handler.SetKey(key)
+	handler.SetAuditManager(auditManager)
 
 	if restore {
 		if err := repository.LoadMetricsFromFile(storage, fileStoragePath); err != nil && !os.IsNotExist(err) {
