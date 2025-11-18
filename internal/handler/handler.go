@@ -22,25 +22,37 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Handler реализует обработчики HTTP-запросов для работы с метриками.
+//
+// Содержит хранилище метрик, подключение к базе данных, ключ для HMAC и менеджер аудита.
 type Handler struct {
-	storage      repository.Storage
-	db           *pgxpool.Pool
-	key          string
-	auditManager models.AuditSubject
+	storage      repository.Storage  // Хранилище метрик
+	db           *pgxpool.Pool       // Подключение к базе данных
+	key          string              // Ключ для HMAC-подписи
+	auditManager models.AuditSubject // Менеджер аудита
 }
 
+// NewHandler создает новый экземпляр Handler.
+//
+// storage — реализация интерфейса Storage для хранения метрик.
+// db — пул подключений к базе данных PostgreSQL.
 func NewHandler(storage repository.Storage, db *pgxpool.Pool) *Handler {
 	return &Handler{storage: storage, db: db}
 }
 
+// SetKey устанавливает ключ для HMAC-подписи ответов.
 func (h *Handler) SetKey(key string) {
 	h.key = key
 }
 
+// SetAuditManager устанавливает менеджер аудита для отправки событий.
 func (h *Handler) SetAuditManager(manager models.AuditSubject) {
 	h.auditManager = manager
 }
 
+// getClientIP извлекает IP-адрес клиента из HTTP-запроса.
+//
+// Сначала проверяет заголовки X-Forwarded-For и X-Real-IP, затем RemoteAddr.
 func (h *Handler) getClientIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
 		return strings.Split(ip, ",")[0]
@@ -51,6 +63,9 @@ func (h *Handler) getClientIP(r *http.Request) string {
 	return strings.Split(r.RemoteAddr, ":")[0]
 }
 
+// sendAuditEvent отправляет событие аудита с именами метрик и IP-адресом клиента.
+//
+// Если менеджер аудита не установлен, ничего не делает.
 func (h *Handler) sendAuditEvent(r *http.Request, metricNames []string) {
 	if h.auditManager == nil {
 		return
@@ -65,12 +80,18 @@ func (h *Handler) sendAuditEvent(r *http.Request, metricNames []string) {
 	h.auditManager.Notify(event)
 }
 
+// computeHash вычисляет HMAC-SHA256 для переданных данных с использованием ключа Handler.
+//
+// Возвращает hex-представление подписи.
 func (h *Handler) computeHash(data []byte) string {
 	hash := hmac.New(sha256.New, []byte(h.key))
 	hash.Write(data)
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
+// verifyHash проверяет корректность подписи HMAC-SHA256 для тела запроса.
+//
+// Если ключ или подпись не заданы, возвращает true.
 func (h *Handler) verifyHash(body []byte, receivedHash string) bool {
 	if h.key == "" {
 		return true
@@ -82,6 +103,9 @@ func (h *Handler) verifyHash(body []byte, receivedHash string) bool {
 	return receivedHash == expectedHash
 }
 
+// writeJSONWithHash сериализует данные в JSON, добавляет подпись HMAC (если задан ключ) и пишет в ответ.
+//
+// Устанавливает Content-Type: application/json и HashSHA256 (если ключ задан).
 func (h *Handler) writeJSONWithHash(w http.ResponseWriter, data interface{}) error {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -101,9 +125,17 @@ func (h *Handler) writeJSONWithHash(w http.ResponseWriter, data interface{}) err
 }
 
 var (
+	// ErrUnknownMetricType возвращается при попытке работы с неизвестным типом метрики.
 	ErrUnknownMetricType = errors.New("unknown metric type")
 )
 
+// ValidateMetricInput валидирует входные параметры метрики и возвращает MetricUpdate.
+//
+// metricType — тип метрики ("gauge" или "counter").
+// metricName — имя метрики.
+// metricValue — значение метрики (строка).
+//
+// Возвращает MetricUpdate или ошибку.
 func ValidateMetricInput(metricType, metricName, metricValue string) (*repository.MetricUpdate, error) {
 	switch metricType {
 	case "gauge":
@@ -131,6 +163,11 @@ func ValidateMetricInput(metricType, metricName, metricValue string) (*repositor
 	}
 }
 
+// HandleUpdate обрабатывает PUT/POST-запросы для обновления значения метрики по URL.
+//
+// Ожидает параметры type, name, value в URL.
+// Сохраняет метрику в хранилище и (если настроено) синхронизирует с БД.
+// Отправляет событие аудита.
 func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
@@ -166,6 +203,10 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleGetMetricValue возвращает значение метрики по имени и типу в виде текста.
+//
+// Ожидает параметры type и name в URL.
+// Возвращает 404, если метрика не найдена.
 func (h *Handler) HandleGetMetricValue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	metricType := chi.URLParam(r, "type")
@@ -191,6 +232,9 @@ func (h *Handler) HandleGetMetricValue(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleMetricsPage возвращает HTML-страницу со списком всех метрик.
+//
+// Формирует HTML-таблицу с именами и значениями метрик.
 func (h *Handler) HandleMetricsPage(w http.ResponseWriter, _ *http.Request) {
 	metrics := h.storage.GetAll()
 
@@ -210,6 +254,9 @@ func (h *Handler) HandleMetricsPage(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte(builder.String()))
 }
 
+// decodeRequestBody декодирует тело запроса в структуру v.
+//
+// Поддерживает сжатие gzip, если установлен соответствующий заголовок.
 func decodeRequestBody(r *http.Request, v interface{}) error {
 	var reader io.Reader = r.Body
 	if r.Header.Get("Content-Encoding") == "gzip" {
@@ -223,7 +270,9 @@ func decodeRequestBody(r *http.Request, v interface{}) error {
 	return json.NewDecoder(reader).Decode(v)
 }
 
-// HandleGetMetricJSON обрабатывает POST /value/ endpoint для получения значения метрики в формате JSON.
+// HandleUpdateJSON обрабатывает POST-запрос для обновления одной метрики в формате JSON.
+//
+// Проверяет подпись HMAC, валидирует и сохраняет метрику, синхронизирует с БД (если настроено), отправляет событие аудита.
 func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -284,7 +333,9 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 	h.sendAuditEvent(r, []string{m.ID})
 }
 
-// HandleGetMetricJSON обрабатывает запросы на получение метрик в формате JSON.
+// HandlerUpdateBatchJSON обрабатывает POST-запрос для пакетного обновления метрик в формате JSON.
+//
+// Проверяет подпись HMAC, валидирует и сохраняет каждую метрику, синхронизирует с БД (если настроено), отправляет событие аудита.
 func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -352,7 +403,9 @@ func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request)
 	h.sendAuditEvent(r, metricNames)
 }
 
-// HandleGetMetricJSON обрабатывает POST-запросы для получения сведений о показателях в формате JSON на основе предоставленного текста запроса.
+// HandleGetMetricJSON обрабатывает POST-запрос для получения значения метрики в формате JSON.
+//
+// Ожидает структуру Metrics в теле запроса, возвращает значение метрики или ошибку.
 func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -391,6 +444,9 @@ func (h *Handler) HandleGetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandlePing проверяет доступность базы данных.
+//
+// Возвращает 200 OK, если соединение с БД успешно, иначе 500.
 func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		http.Error(w, "database not configured", http.StatusInternalServerError)

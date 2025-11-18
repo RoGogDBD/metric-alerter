@@ -13,13 +13,21 @@ import (
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 )
 
-// FileAuditObserver записывает события аудита в файл
+// FileAuditObserver записывает события аудита в файл.
+//
+// Поля:
+//   - filePath: путь к файлу для записи событий
+//   - mu: мьютекс для синхронизации доступа к файлу
 type FileAuditObserver struct {
 	filePath string
 	mu       sync.Mutex
 }
 
-// NewFileAuditObserver создает новый FileAuditObserver
+// NewFileAuditObserver создает новый экземпляр FileAuditObserver.
+//
+// filePath — путь к файлу аудита.
+//
+// Возвращает указатель на FileAuditObserver.
 func NewFileAuditObserver(filePath string) *FileAuditObserver {
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -29,7 +37,11 @@ func NewFileAuditObserver(filePath string) *FileAuditObserver {
 	return &FileAuditObserver{filePath: filePath}
 }
 
-// OnAuditEvent обрабатывает событие аудита, записывая его в файл
+// OnAuditEvent обрабатывает событие аудита, записывая его в файл.
+//
+// event — событие аудита для записи.
+//
+// Возвращает ошибку при неудаче записи.
 func (f *FileAuditObserver) OnAuditEvent(event models.AuditEvent) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -52,13 +64,21 @@ func (f *FileAuditObserver) OnAuditEvent(event models.AuditEvent) error {
 	return nil
 }
 
-// HTTPAuditObserver отправляет события аудита на удаленный сервер
+// HTTPAuditObserver отправляет события аудита на удалённый сервер.
+//
+// Поля:
+//   - url: адрес удалённого сервера
+//   - client: HTTP-клиент для отправки запросов
 type HTTPAuditObserver struct {
 	url    string
 	client *http.Client
 }
 
-// NewHTTPAuditObserver создает новый HTTPAuditObserver
+// NewHTTPAuditObserver создает новый экземпляр HTTPAuditObserver.
+//
+// url — адрес удалённого сервера.
+//
+// Возвращает указатель на HTTPAuditObserver.
 func NewHTTPAuditObserver(url string) *HTTPAuditObserver {
 	return &HTTPAuditObserver{
 		url:    url,
@@ -66,7 +86,11 @@ func NewHTTPAuditObserver(url string) *HTTPAuditObserver {
 	}
 }
 
-// OnAuditEvent обрабатывает событие аудита, отправляя его на удаленный сервер
+// OnAuditEvent обрабатывает событие аудита, отправляя его на удалённый сервер.
+//
+// event — событие аудита для отправки.
+//
+// Возвращает ошибку при неудаче отправки.
 func (h *HTTPAuditObserver) OnAuditEvent(event models.AuditEvent) error {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -86,27 +110,37 @@ func (h *HTTPAuditObserver) OnAuditEvent(event models.AuditEvent) error {
 	return nil
 }
 
-// AuditManager управляет наблюдателями и уведомляет их о событиях
+// AuditManager управляет списком наблюдателей аудита и уведомляет их о событиях.
+//
+// Поля:
+//   - observers: список наблюдателей (AuditObserver)
+//   - mu: RW-мьютекс для синхронизации доступа к списку наблюдателей
 type AuditManager struct {
 	observers []models.AuditObserver
 	mu        sync.RWMutex
 }
 
-// NewAuditManager создает новый AuditManager
+// NewAuditManager создает новый экземпляр AuditManager.
+//
+// Возвращает указатель на AuditManager.
 func NewAuditManager() *AuditManager {
 	return &AuditManager{
 		observers: make([]models.AuditObserver, 0),
 	}
 }
 
-// Attach добавляет наблюдателя
+// Attach добавляет наблюдателя к списку.
+//
+// observer — наблюдатель, реализующий интерфейс AuditObserver.
 func (a *AuditManager) Attach(observer models.AuditObserver) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.observers = append(a.observers, observer)
 }
 
-// Detach удаляет наблюдателя
+// Detach удаляет наблюдателя из списка.
+//
+// observer — наблюдатель для удаления.
 func (a *AuditManager) Detach(observer models.AuditObserver) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -118,7 +152,9 @@ func (a *AuditManager) Detach(observer models.AuditObserver) {
 	}
 }
 
-// Notify уведомляет всех наблюдателей о событии
+// Notify уведомляет всех подключённых наблюдателей о событии.
+//
+// event — событие аудита для рассылки.
 func (a *AuditManager) Notify(event models.AuditEvent) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -130,7 +166,9 @@ func (a *AuditManager) Notify(event models.AuditEvent) {
 	}
 }
 
-// HasObservers проверяет, есть ли подключенные наблюдатели
+// HasObservers проверяет, есть ли подключённые наблюдатели.
+//
+// Возвращает true, если список наблюдателей не пуст.
 func (a *AuditManager) HasObservers() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

@@ -10,6 +10,12 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// Initialize инициализирует zap.Logger с заданным уровнем логирования.
+//
+// level — строка, определяющая уровень логирования ("debug", "warn", "error", по умолчанию "info").
+// Логи пишутся в файл ./logs/app.log и в stdout. Время логируется в формате ISO8601.
+//
+// Возвращает инициализированный *zap.Logger или ошибку при неудаче.
 func Initialize(level string) (*zap.Logger, error) {
 	if err := os.MkdirAll("./logs", 0755); err != nil {
 		return nil, err
@@ -42,23 +48,31 @@ func Initialize(level string) (*zap.Logger, error) {
 	return logger, nil
 }
 
+// statusRecorder реализует http.ResponseWriter и позволяет сохранять статус и размер ответа.
+//
+// Используется для логирования HTTP-запросов с сохранением кода статуса и размера ответа.
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
-	size   int
+	status int // HTTP-статус ответа
+	size   int // Размер тела ответа в байтах
 }
 
+// WriteHeader сохраняет статус ответа и вызывает оригинальный WriteHeader.
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
 }
 
+// Write записывает данные в ответ и увеличивает счетчик размера ответа.
 func (r *statusRecorder) Write(b []byte) (int, error) {
 	size, err := r.ResponseWriter.Write(b)
 	r.size += size
 	return size, err
 }
 
+// RequestLogger возвращает middleware для логирования HTTP-запросов с помощью zap.Logger.
+//
+// Для каждого запроса логируются метод, URL, статус, размер ответа, длительность и удалённый адрес.
 func RequestLogger(logger *zap.Logger) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

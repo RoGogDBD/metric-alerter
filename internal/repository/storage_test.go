@@ -6,11 +6,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestMemStorage_TableDriven выполняет табличные тесты для реализации интерфейса Storage на основе MemStorage.
+//
+// Для каждого теста:
+// - Заполняет хранилище метрик с помощью функции setup.
+// - Проверяет корректность работы методов SetGauge, GetGauge, AddCounter, GetCounter и GetAll с помощью функции check.
+// - Проверяет работу с отсутствующими метриками.
+//
+// - указатель на структуру теста.
 func TestMemStorage_TableDriven(t *testing.T) {
 	tests := []struct {
-		name  string
-		setup func(s Storage)
-		check func(t *testing.T, s Storage)
+		name  string                        // Название теста
+		setup func(s Storage)               // Функция подготовки состояния хранилища
+		check func(t *testing.T, s Storage) // Функция проверки состояния хранилища
 	}{
 		{
 			name: "gauge set/get",

@@ -13,6 +13,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// GetEnvOrFlagInt возвращает значение переменной окружения по ключу envKey как int,
+// либо значение flagVal, если переменная не установлена или не может быть преобразована.
+//
+// envKey — имя переменной окружения.
+// flagVal — значение по умолчанию.
+//
+// Возвращает int.
 func GetEnvOrFlagInt(envKey string, flagVal int) int {
 	if v := os.Getenv(envKey); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
@@ -22,6 +29,13 @@ func GetEnvOrFlagInt(envKey string, flagVal int) int {
 	return flagVal
 }
 
+// GetEnvOrFlagString возвращает значение переменной окружения по ключу envKey как строку,
+// либо значение flagVal, если переменная не установлена.
+//
+// envKey — имя переменной окружения.
+// flagVal — значение по умолчанию.
+//
+// Возвращает строку.
 func GetEnvOrFlagString(envKey string, flagVal string) string {
 	if v := os.Getenv(envKey); v != "" {
 		return v
@@ -29,6 +43,15 @@ func GetEnvOrFlagString(envKey string, flagVal string) string {
 	return flagVal
 }
 
+// GetEnvOrFlagBool возвращает значение переменной окружения по ключу envKey как bool,
+// либо значение flagVal, если переменная не установлена.
+//
+// Значение переменной окружения считается true, если оно равно "true".
+//
+// envKey — имя переменной окружения.
+// flagVal — значение по умолчанию.
+//
+// Возвращает bool.
 func GetEnvOrFlagBool(envKey string, flagVal bool) bool {
 	if v := os.Getenv(envKey); v != "" {
 		return v == "true"
@@ -36,6 +59,12 @@ func GetEnvOrFlagBool(envKey string, flagVal bool) bool {
 	return flagVal
 }
 
+// SaveMetricsToFile сохраняет все метрики из хранилища storage в файл filePath в формате JSON.
+//
+// storage — интерфейс хранилища метрик.
+// filePath — путь к файлу для сохранения.
+//
+// Возвращает ошибку при неудаче записи.
 func SaveMetricsToFile(storage Storage, filePath string) error {
 	metrics := storage.GetAll()
 	var out []models.Metrics
@@ -66,6 +95,16 @@ func SaveMetricsToFile(storage Storage, filePath string) error {
 	return enc.Encode(out)
 }
 
+// SyncToDB синхронизирует все метрики из хранилища storage с базой данных db.
+//
+// Использует транзакцию и стратегию повторов с экспоненциальной задержкой.
+// Для каждой метрики выполняет UPSERT (insert/update) в таблицу metrics.
+//
+// ctx — контекст выполнения.
+// storage — интерфейс хранилища метрик.
+// db — пул соединений с PostgreSQL.
+//
+// Возвращает ошибку при неудаче синхронизации.
 func SyncToDB(ctx context.Context, storage Storage, db *pgxpool.Pool) error {
 	return config.RetryWithBackoff(ctx, func() error {
 		metrics := storage.GetAll()
@@ -77,13 +116,13 @@ func SyncToDB(ctx context.Context, storage Storage, db *pgxpool.Pool) error {
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		stmt := `
-				INSERT INTO metrics (id, type, delta, value)
-				VALUES ($1, $2, $3, $4)
-				ON CONFLICT (id) DO UPDATE
-				SET type = EXCLUDED.type,
-					delta = EXCLUDED.delta,
-					value = EXCLUDED.value
-			`
+						INSERT INTO metrics (id, type, delta, value)
+						VALUES ($1, $2, $3, $4)
+						ON CONFLICT (id) DO UPDATE
+						SET type = EXCLUDED.type,
+							delta = EXCLUDED.delta,
+							value = EXCLUDED.value
+					`
 
 		for _, m := range metrics {
 			switch m.Type {
@@ -108,6 +147,15 @@ func SyncToDB(ctx context.Context, storage Storage, db *pgxpool.Pool) error {
 	})
 }
 
+// LoadMetricsFromFile загружает метрики из файла filePath в хранилище storage.
+//
+// Ожидает, что файл содержит массив метрик в формате JSON.
+// Для каждой метрики вызывает соответствующий метод хранилища.
+//
+// storage — интерфейс хранилища метрик.
+// filePath — путь к файлу для загрузки.
+//
+// Возвращает ошибку при неудаче чтения или декодирования.
 func LoadMetricsFromFile(storage Storage, filePath string) error {
 	f, err := os.Open(filePath)
 	if err != nil {

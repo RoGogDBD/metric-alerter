@@ -9,10 +9,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// TestInitialize_TableDriven выполняет табличные тесты для функции Initialize.
+//
+// Проверяет, что инициализация логгера проходит без ошибок для различных уровней логирования.
+// После выполнения тестов удаляет директорию ./logs.
 func TestInitialize_TableDriven(t *testing.T) {
 	tests := []struct {
-		name  string
-		level string
+		name  string // Название теста
+		level string // Уровень логирования для инициализации
 	}{
 		{"debug", "debug"},
 		{"info", "info"},
@@ -35,22 +39,27 @@ func TestInitialize_TableDriven(t *testing.T) {
 			if logger == nil {
 				t.Fatalf("Initialize(%q) returned nil logger", tt.level)
 			}
-			// flush
+			// Завершает работу логгера, сбрасывая буферы.
 			_ = logger.Sync()
 		})
 	}
 }
 
+// TestRequestLogger_TableDriven выполняет табличные тесты для middleware RequestLogger.
+//
+// Проверяет, что middleware корректно обрабатывает различные HTTP-статусы и длины тела ответа.
+// Для каждого теста создаётся обработчик, который возвращает заданный статус и тело ответа.
+// Проверяется, что статус и длина тела ответа соответствуют ожидаемым значениям.
 func TestRequestLogger_TableDriven(t *testing.T) {
 	logger := zap.NewNop()
 	middleware := RequestLogger(logger)
 
 	tests := []struct {
-		name       string
-		status     int
-		body       string
-		expStatus  int
-		expBodyLen int
+		name       string // Название теста
+		status     int    // HTTP-статус, который возвращает обработчик
+		body       string // Тело ответа
+		expStatus  int    // Ожидаемый HTTP-статус
+		expBodyLen int    // Ожидаемая длина тела ответа
 	}{
 		{"ok small", http.StatusOK, "ok", http.StatusOK, len("ok")},
 		{"created", http.StatusCreated, "created-response", http.StatusCreated, len("created-response")},

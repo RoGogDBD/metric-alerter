@@ -12,18 +12,32 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+// floatPtr возвращает указатель на переданное значение float64.
+//
+// f — значение типа float64.
+// Возвращает указатель на float64.
 func floatPtr(f float64) *float64 { return &f }
+
+// int64Ptr преобразует float64 в int64 и возвращает указатель на него.
+//
+// i — значение типа float64.
+// Возвращает указатель на int64.
 func int64Ptr(i float64) *int64 {
 	v := int64(i)
 	return &v
 }
 
+// TestSendMetrics тестирует функцию отправки метрик sendMetrics.
+// Проверяет корректность формирования и передачи метрик типа gauge и counter через HTTP.
+// Использует httptest для имитации сервера и проверки содержимого запроса.
+//
+// t — указатель на структуру тестирования *testing.T.
 func TestSendMetrics(t *testing.T) {
 	tests := []struct {
-		name     string
-		metric   Metric
-		expected models.Metrics
-		status   int
+		name     string         // Название теста
+		metric   Metric         // Входная метрика для отправки
+		expected models.Metrics // Ожидаемая структура метрики на сервере
+		status   int            // HTTP-статус, который должен вернуть сервер
 	}{
 		{
 			name:   "GaugeSuccess",
@@ -71,6 +85,7 @@ func TestSendMetrics(t *testing.T) {
 
 			var got []models.Metrics
 
+			// Тестовый HTTP-сервер для проверки полученных метрик
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer r.Body.Close()
 

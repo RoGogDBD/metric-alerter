@@ -17,19 +17,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// main — точка входа в приложение сервера метрик.
+// Инициализирует и запускает сервер, логирует фатальные ошибки при запуске.
 func main() {
 	if err := run(); err != nil {
 		log.Fatalf("server failed to start: %v", err)
 	}
 }
 
+// run выполняет основную инициализацию и запуск HTTP-сервера.
+//
+// Возвращает ошибку при неудаче запуска или инициализации.
 func run() error {
+	// Инициализация логгера с уровнем info
 	logger, err := config.Initialize("info")
 	if err != nil {
 		return err
 	}
 	defer logger.Sync()
 
+	// Определение флагов командной строки
 	dsnFlag := flag.String("d", "", "PostgreSQL DSN")
 	storeIntervalFlag := flag.Int("i", 300, "Store interval in seconds")
 	fileStorageFlag := flag.String("f", "metrics.json", "File storage path")
@@ -40,11 +47,13 @@ func run() error {
 	addr := config.ParseAddressFlag()
 	flag.Parse()
 
+	// Получение значений из переменных окружения или флагов
 	dsn := repository.GetEnvOrFlagString("DATABASE_DSN", *dsnFlag)
 	key := repository.GetEnvOrFlagString("KEY", *keyFlag)
 	auditFile := repository.GetEnvOrFlagString("AUDIT_FILE", *auditFileFlag)
 	auditURL := repository.GetEnvOrFlagString("AUDIT_URL", *auditURLFlag)
 
+	// Инициализация менеджера аудита и добавление наблюдателей
 	auditManager := repository.NewAuditManager()
 	if auditFile != "" {
 		if !filepath.IsAbs(auditFile) {
@@ -63,6 +72,7 @@ func run() error {
 		log.Printf("Audit HTTP observer enabled: %s", auditURL)
 	}
 
+	// Инициализация пула соединений с БД, если указан DSN
 	var dbPool *pgxpool.Pool
 	if dsn != "" {
 		dbPool, err = db.InitDB(context.Background(), dsn)
@@ -73,23 +83,28 @@ func run() error {
 		log.Println("No DSN provided, database features disabled")
 	}
 
+	// Получение параметров хранения и восстановления метрик
 	storeInterval := repository.GetEnvOrFlagInt("STORE_INTERVAL", *storeIntervalFlag)
 	fileStoragePath := repository.GetEnvOrFlagString("FILE_STORAGE_PATH", *fileStorageFlag)
 	restore := repository.GetEnvOrFlagBool("RESTORE", *restoreFlag)
 
+	// Инициализация хранилища и обработчика HTTP-запросов
 	storage := repository.NewMemStorage()
 	handler := handler.NewHandler(storage, dbPool)
 	handler.SetKey(key)
 	handler.SetAuditManager(auditManager)
 
+	// Восстановление метрик из файла при необходимости
 	if restore {
 		if err := repository.LoadMetricsFromFile(storage, fileStoragePath); err != nil && !os.IsNotExist(err) {
 			log.Printf("Failed to restore metrics: %v", err)
 		}
 	}
 
+	// Создание маршрутизатора HTTP-запросов
 	r := service.NewRouter(handler, storage, storeInterval, fileStoragePath, logger)
 
+	// Применение адреса сервера из переменной окружения, если задано
 	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
 		return err
 	}

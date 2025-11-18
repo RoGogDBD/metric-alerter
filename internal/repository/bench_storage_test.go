@@ -8,6 +8,13 @@ import (
 	"testing"
 )
 
+// maybeWriteHeapProfile записывает профиль кучи в файл, если установлена переменная окружения PROFILE_OUT.
+//
+// Если переменная окружения PROFILE_OUT не задана, функция ничего не делает.
+// В противном случае выполняет сборку мусора, создает файл по указанному пути и сохраняет в него профиль кучи.
+// В случае ошибки завершает выполнение теста с фатальной ошибкой.
+//
+// b — указатель на структуру теста/бенчмарка.
 func maybeWriteHeapProfile(b *testing.B) {
 	out := os.Getenv("PROFILE_OUT")
 	if out == "" {
@@ -24,6 +31,12 @@ func maybeWriteHeapProfile(b *testing.B) {
 	}
 }
 
+// BenchmarkMemStorage_SetGet измеряет производительность операций установки и получения метрик в MemStorage.
+//
+// В цикле выполняет SetGauge, GetGauge, AddCounter и GetCounter для 1000 различных метрик.
+// После завершения бенчмарка, при необходимости, записывает профиль кучи.
+//
+// b — указатель на структуру теста/бенчмарка.
 func BenchmarkMemStorage_SetGet(b *testing.B) {
 	s := NewMemStorage()
 	b.ResetTimer()

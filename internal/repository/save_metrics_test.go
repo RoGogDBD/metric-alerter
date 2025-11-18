@@ -10,6 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestGetEnvOrFlag_TableDriven выполняет табличные тесты для функций получения значения из переменной окружения или флага.
+//
+// Проверяет корректность работы функций GetEnvOrFlagInt, GetEnvOrFlagString и GetEnvOrFlagBool:
+// - Если переменная окружения не установлена, возвращается значение по умолчанию.
+// - Если переменная окружения установлена, возвращается её значение (с приведением типа).
+//
+// t — указатель на структуру теста.
 func TestGetEnvOrFlag_TableDriven(t *testing.T) {
 	t.Run("Int override by env", func(t *testing.T) {
 		key := "TEST_SAVE_METRICS_INT"
@@ -51,6 +58,16 @@ func TestGetEnvOrFlag_TableDriven(t *testing.T) {
 	})
 }
 
+// TestSaveAndLoadMetrics_TableDriven выполняет табличные тесты для функций сохранения и загрузки метрик.
+//
+// Для каждого теста:
+// - Заполняет хранилище метрик с помощью функции setup.
+// - Сохраняет метрики в файл с помощью SaveMetricsToFile.
+// - Проверяет, что файл содержит корректный JSON.
+// - Загружает метрики из файла в новое хранилище с помощью LoadMetricsFromFile.
+// - Сравнивает исходные и загруженные метрики по количеству, типу и значению.
+//
+// t — указатель на структуру теста.
 func TestSaveAndLoadMetrics_TableDriven(t *testing.T) {
 	tests := []struct {
 		name  string

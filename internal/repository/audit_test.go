@@ -15,14 +15,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestFileAuditObserver_OnAuditEvent_TableDriven выполняет табличные тесты для метода OnAuditEvent структуры FileAuditObserver.
+//
+// Проверяет, что события аудита корректно записываются в файл, включая создание вложенных директорий.
+// Для каждого теста сравнивает содержимое файла с ожидаемой строкой.
 func TestFileAuditObserver_OnAuditEvent_TableDriven(t *testing.T) {
 	tmpDir := t.TempDir()
 	tests := []struct {
-		name     string
-		filePath string
-		event    models.AuditEvent
-		wantLine string
-		wantErr  bool
+		name     string            // Название теста
+		filePath string            // Путь к файлу аудита
+		event    models.AuditEvent // Событие аудита для записи
+		wantLine string            // Ожидаемая строка в файле
+		wantErr  bool              // Ожидается ли ошибка
 	}{
 		{
 			name:     "write simple event",
@@ -62,11 +66,15 @@ func TestFileAuditObserver_OnAuditEvent_TableDriven(t *testing.T) {
 	}
 }
 
+// TestHTTPAuditObserver_OnAuditEvent_TableDriven выполняет табличные тесты для метода OnAuditEvent структуры HTTPAuditObserver.
+//
+// Проверяет, что события аудита корректно отправляются на HTTP-сервер и обрабатываются различные коды ответа.
+// Для успешных случаев проверяет, что отправленные данные содержат нужные поля.
 func TestHTTPAuditObserver_OnAuditEvent_TableDriven(t *testing.T) {
 	tests := []struct {
-		name        string
-		respondCode int
-		wantErr     bool
+		name        string // Название теста
+		respondCode int    // Код ответа сервера
+		wantErr     bool   // Ожидается ли ошибка
 	}{
 		{"ok 200", http.StatusOK, false},
 		{"created 201", http.StatusCreated, false},
@@ -92,7 +100,7 @@ func TestHTTPAuditObserver_OnAuditEvent_TableDriven(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.NotZero(t, received.Len())
-				// verify that sent JSON contains metrics field and value
+				// Проверяет, что отправленный JSON содержит поле metrics и значение upd
 				require.Contains(t, received.String(), `"metrics"`)
 				require.Contains(t, received.String(), "upd")
 			}
@@ -100,6 +108,10 @@ func TestHTTPAuditObserver_OnAuditEvent_TableDriven(t *testing.T) {
 	}
 }
 
+// TestAuditManager_TableDriven выполняет табличные тесты для структуры AuditManager.
+//
+// Проверяет корректность добавления и удаления наблюдателей, а также рассылку событий.
+// Для каждого теста проверяет, что событие записано в файл, если ожидается, и что список наблюдателей корректно очищается.
 func TestAuditManager_TableDriven(t *testing.T) {
 	mgr := NewAuditManager()
 
@@ -113,10 +125,10 @@ func TestAuditManager_TableDriven(t *testing.T) {
 	httpObs := NewHTTPAuditObserver(srv.URL)
 
 	tests := []struct {
-		name     string
-		attach   []models.AuditObserver
-		event    models.AuditEvent
-		wantFile bool
+		name     string                 // Название теста
+		attach   []models.AuditObserver // Список наблюдателей для подключения
+		event    models.AuditEvent      // Событие аудита для рассылки
+		wantFile bool                   // Ожидать ли запись в файл
 	}{
 		{"single file observer", []models.AuditObserver{fileObs}, models.AuditEvent{Timestamp: time.Now().Unix(), Metrics: []string{"t1"}}, true},
 		{"file + http", []models.AuditObserver{fileObs, httpObs}, models.AuditEvent{Timestamp: time.Now().Unix(), Metrics: []string{"t2"}}, true},

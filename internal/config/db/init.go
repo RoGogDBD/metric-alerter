@@ -9,6 +9,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// InitDB инициализирует пул соединений с базой данных PostgreSQL и выполняет миграции.
+//
+// Функция использует механизм повторных попыток (RetryWithBackoff) для подключения к базе данных
+// и для выполнения миграций. В случае неудачи возвращает ошибку.
+//
+// ctx — контекст для управления временем жизни операций.
+// dsn — строка подключения к базе данных.
+//
+// Возвращает указатель на пул соединений (*pgxpool.Pool) и ошибку (error), если что-то пошло не так.
 func InitDB(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	var pool *pgxpool.Pool
 	err := config.RetryWithBackoff(ctx, func() error {

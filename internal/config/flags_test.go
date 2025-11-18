@@ -5,13 +5,17 @@ import (
 	"testing"
 )
 
+// TestNetAddress_SetAndString_TableDriven проверяет методы Set и String структуры NetAddress с помощью табличных тестов.
+//
+// Для каждого тестового случая проверяется корректность разбора строки адреса, установка host и port,
+// а также корректность строкового представления адреса. Также тестируется обработка ошибочных входных данных.
 func TestNetAddress_SetAndString_TableDriven(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		exHost    string
-		exPort    int
-		expectErr bool
+		name      string // Название теста
+		input     string // Входная строка для метода Set
+		exHost    string // Ожидаемый host после Set
+		exPort    int    // Ожидаемый port после Set
+		expectErr bool   // Ожидается ли ошибка
 	}{
 		{"host:port", "localhost:9000", "localhost", 9000, false},
 		{"only host", "example", "example", 8080, false},
@@ -53,6 +57,9 @@ func TestNetAddress_SetAndString_TableDriven(t *testing.T) {
 	}
 }
 
+// TestParseAddressFlag_Defaults проверяет, что функция ParseAddressFlag возвращает NetAddress с дефолтными значениями.
+//
+// Проверяется, что host равен "localhost", а port — 8080.
 func TestParseAddressFlag_Defaults(t *testing.T) {
 	addr := ParseAddressFlag()
 	if addr == nil {

@@ -7,16 +7,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestValidateMetricInput_TableDriven выполняет табличные тесты для функции ValidateMetricInput.
+//
+// Проверяет корректность разбора и валидации входных параметров метрик различных типов.
+// Для каждого случая проверяет, что функция возвращает ожидаемый тип, имя и значение метрики,
+// а также корректно обрабатывает ошибочные входные данные.
 func TestValidateMetricInput_TableDriven(t *testing.T) {
 	tests := []struct {
-		name        string
-		typeStr     string
-		nameStr     string
-		valueStr    string
-		expectsErr  bool
-		expectsType string
-		expectsInt  int64
-		expectsFlt  float64
+		name        string  // Название теста
+		typeStr     string  // Тип метрики (gauge/counter/unknown)
+		nameStr     string  // Имя метрики
+		valueStr    string  // Значение метрики в виде строки
+		expectsErr  bool    // Ожидается ли ошибка
+		expectsType string  // Ожидаемый тип метрики
+		expectsInt  int64   // Ожидаемое целое значение (для counter)
+		expectsFlt  float64 // Ожидаемое значение с плавающей точкой (для gauge)
 	}{
 		{"gauge ok", "gauge", "m1", "12.34", false, "gauge", 0, 12.34},
 		{"gauge bad", "gauge", "m1", "notfloat", true, "", 0, 0},
@@ -49,15 +54,19 @@ func TestValidateMetricInput_TableDriven(t *testing.T) {
 	}
 }
 
+// TestHandler_HashVerification_TableDriven выполняет табличные тесты для проверки работы HMAC-подписи и верификации.
+//
+// Проверяет различные комбинации наличия ключа и подписи, а также корректность вычисления и проверки HMAC.
+// Для каждого случая сравнивает результат с ожидаемым.
 func TestHandler_HashVerification_TableDriven(t *testing.T) {
 	h := NewHandler(nil, (*pgxpool.Pool)(nil))
 
 	tests := []struct {
-		name      string
-		key       string
-		payload   []byte
-		headHash  string
-		expectsOk bool
+		name      string // Название теста
+		key       string // Ключ для HMAC
+		payload   []byte // Данные для подписи
+		headHash  string // Подпись, переданная в заголовке
+		expectsOk bool   // Ожидается ли успешная верификация
 	}{
 		{"no key no hash", "", []byte("data"), "", true},
 		{"no key with hash", "", []byte("data"), "something", true},

@@ -10,20 +10,31 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// TestRetryWithBackoff тестирует функцию RetryWithBackoff на корректность обработки различных сценариев.
+//
+// Проверяются следующие случаи:
+//   - Успешное выполнение после одной или нескольких повторных попыток (ретраев)
+//   - Немедленный возврат ошибки, если ошибка не является временной (не ретраится)
+//   - Исчерпание всех попыток с возвратом последней ошибки
+//   - Прерывание по отмене контекста (context.Canceled)
+//
+// Для каждого теста задаются интервалы между попытками, фабрика операции (opFactory),
+// ожидается ли ошибка, ожидается ли отмена контекста, минимальное количество вызовов,
+// ожидаемый код ошибки PostgreSQL и ожидаемые сообщения об ошибках.
 func TestRetryWithBackoff(t *testing.T) {
 	delay := retryIntervals
 	defer func() { retryIntervals = delay }()
 
 	tests := []struct {
-		name                  string
-		intervals             []time.Duration
-		opFactory             func() (func() error, *int)
-		expectErr             bool
-		expectContextCanceled bool
-		expectMinCalls        int
-		expectPGCode          string
-		expectMsgContains     string
-		expectExactError      string
+		name                  string                      // Название теста
+		intervals             []time.Duration             // Интервалы между попытками
+		opFactory             func() (func() error, *int) // Фабрика операции и счетчика вызовов
+		expectErr             bool                        // Ожидается ли ошибка
+		expectContextCanceled bool                        // Ожидается ли отмена контекста
+		expectMinCalls        int                         // Минимальное количество вызовов операции
+		expectPGCode          string                      // Ожидаемый код ошибки PostgreSQL
+		expectMsgContains     string                      // Ожидаемая подстрока в сообщении об ошибке
+		expectExactError      string                      // Ожидаемое точное сообщение об ошибке
 	}{
 		{
 			name:      "SucceedsAfterRetry",

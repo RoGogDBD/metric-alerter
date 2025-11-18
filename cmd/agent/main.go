@@ -51,6 +51,7 @@ type Metric struct {
 
 // MetricsSender — интерфейс для отправки батча метрик.
 type MetricsSender interface {
+	// SendBatch отправляет срез метрик на сервер.
 	SendBatch(metrics []models.Metrics) error
 }
 
@@ -79,6 +80,8 @@ type AgentState struct {
 }
 
 // collectMetrics собирает метрики из runtime и обновляет их в коллекторе.
+//
+// state — текущее состояние агента.
 func collectMetrics(state *AgentState) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -149,6 +152,9 @@ func (c *MetricsCollector) collectSystemMetrics() {
 }
 
 // buildBatchSnapshot формирует срез метрик для отправки (снимок текущего состояния).
+//
+// state — текущее состояние агента.
+// Возвращает срез моделей метрик для отправки.
 func buildBatchSnapshot(state *AgentState) []models.Metrics {
 	state.Collector.mu.RLock()
 	defer state.Collector.mu.RUnlock()
@@ -172,6 +178,8 @@ func buildBatchSnapshot(state *AgentState) []models.Metrics {
 }
 
 // sendMetrics отправляет батч метрик через Sender.
+//
+// state — текущее состояние агента.
 func sendMetrics(state *AgentState) {
 	batch := buildBatchSnapshot(state)
 	if len(batch) == 0 {
@@ -183,6 +191,8 @@ func sendMetrics(state *AgentState) {
 }
 
 // startWorkerPool запускает пул воркеров для параллельной отправки метрик.
+//
+// state — текущее состояние агента.
 func startWorkerPool(state *AgentState) {
 	if state.Config.RateLimit <= 0 {
 		state.Config.RateLimit = 1
@@ -208,6 +218,9 @@ type RestySender struct {
 }
 
 // SendBatch сжимает, подписывает и отправляет батч метрик на сервер.
+//
+// metrics — срез метрик для отправки.
+// Возвращает ошибку при неудаче.
 func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	body, err := json.Marshal(metrics)
 	if err != nil {
@@ -275,6 +288,10 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 }
 
 // computeHMACSHA256 вычисляет HMAC-SHA256 для данных с заданным ключом.
+//
+// data — данные для подписи.
+// key — ключ для HMAC.
+// Возвращает hex-строку подписи.
 func computeHMACSHA256(data []byte, key string) string {
 	h := hmac.New(sha256.New, []byte(key))
 	h.Write(data)
@@ -282,6 +299,8 @@ func computeHMACSHA256(data []byte, key string) string {
 }
 
 // parseFlags парсит флаги командной строки и переменные окружения, возвращает адрес сервера и состояние агента.
+//
+// Возвращает указатель на сетевой адрес и состояние агента.
 func parseFlags() (*config.NetAddress, *AgentState) {
 	addr := config.ParseAddressFlag()
 	poll := flag.Int("p", 2, "Poll interval in seconds")
