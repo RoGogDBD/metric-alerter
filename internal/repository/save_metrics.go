@@ -61,7 +61,7 @@ func SaveMetricsToFile(storage Storage, filePath string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	return enc.Encode(out)
 }
@@ -74,16 +74,16 @@ func SyncToDB(ctx context.Context, storage Storage, db *pgxpool.Pool) error {
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-		defer tx.Rollback(ctx)
+		defer func() { _ = tx.Rollback(ctx) }()
 
 		stmt := `
-			INSERT INTO metrics (id, type, delta, value)
-			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (id) DO UPDATE
-			SET type = EXCLUDED.type,
-				delta = EXCLUDED.delta,
-				value = EXCLUDED.value
-		`
+				INSERT INTO metrics (id, type, delta, value)
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (id) DO UPDATE
+				SET type = EXCLUDED.type,
+					delta = EXCLUDED.delta,
+					value = EXCLUDED.value
+			`
 
 		for _, m := range metrics {
 			switch m.Type {
@@ -113,7 +113,7 @@ func LoadMetricsFromFile(storage Storage, filePath string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return err

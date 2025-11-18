@@ -38,7 +38,7 @@ func (f *FileAuditObserver) OnAuditEvent(event models.AuditEvent) error {
 	if err != nil {
 		return fmt.Errorf("failed to open audit file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -77,7 +77,7 @@ func (h *HTTPAuditObserver) OnAuditEvent(event models.AuditEvent) error {
 	if err != nil {
 		return fmt.Errorf("failed to send audit event: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("audit server returned status %d", resp.StatusCode)
