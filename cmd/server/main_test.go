@@ -10,12 +10,25 @@ import (
 	"github.com/go-chi/chi"
 )
 
+// TestHandler_ServeHTTP тестирует обработку различных HTTP-запросов к серверу метрик.
+//
+// Проверяет корректность обработки следующих сценариев:
+//   - Обновление метрики типа gauge (POST /update/gauge/Alloc/123.45)
+//   - Обновление метрики типа counter (POST /update/counter/PollCount/1)
+//   - Некорректный HTTP-метод (GET вместо POST)
+//   - Неизвестный тип метрики (POST /update/unknown/Alloc/123.45)
+//   - Некорректный путь (POST /invalidpath)
+//   - Некорректное значение для counter (POST /update/counter/PollCount/abc)
+//
+// Для каждого случая проверяется ожидаемый HTTP-статус ответа.
+//
+// t — указатель на структуру тестирования *testing.T.
 func TestHandler_ServeHTTP(t *testing.T) {
 	tests := []struct {
-		name       string
-		method     string
-		url        string
-		wantStatus int
+		name       string // Название теста
+		method     string // HTTP-метод запроса
+		url        string // URL запроса
+		wantStatus int    // Ожидаемый HTTP-статус ответа
 	}{
 		{
 			name:       "Valid gauge update",
@@ -57,14 +70,17 @@ func TestHandler_ServeHTTP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Инициализация in-memory хранилища и обработчика
 			storage := repository.NewMemStorage()
 			handler := handler.NewHandler(storage, nil)
 
+			// Настройка маршрутов chi
 			r := chi.NewRouter()
 			r.Post("/update/{type}/{name}/{value}", handler.HandleUpdate)
 			r.Get("/value/{type}/{name}", handler.HandleGetMetricValue)
 			r.Get("/", handler.HandleMetricsPage)
 
+			// Создание HTTP-запроса и запись ответа
 			req := httptest.NewRequest(tt.method, tt.url, nil)
 			w := httptest.NewRecorder()
 
@@ -73,6 +89,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 			resp := w.Result()
 			defer resp.Body.Close()
 
+			// Проверка соответствия статуса ответа ожидаемому
 			if resp.StatusCode != tt.wantStatus {
 				t.Errorf("expected status %d, got %d", tt.wantStatus, resp.StatusCode)
 			}

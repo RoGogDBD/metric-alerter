@@ -1,0 +1,238 @@
+basePath: /
+definitions:
+  models.Metrics:
+    properties:
+      delta:
+        type: integer
+      hash:
+        type: string
+      id:
+        type: string
+      type:
+        type: string
+      value:
+        type: number
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+    url: http://www.example.com/support
+  description: REST API для сбора и хранения метрик системы
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Metrics Alerter API
+  version: "1.0"
+paths:
+  /:
+    get:
+      description: Возвращает HTML-страницу со списком всех сохранённых метрик
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: HTML-страница со списком метрик
+          schema:
+            type: string
+      summary: Получить HTML-страницу со всеми метриками
+      tags:
+      - Metrics
+  /ping:
+    get:
+      description: Проверяет соединение с базой данных PostgreSQL
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+        "500":
+          description: База данных недоступна
+          schema:
+            type: string
+      summary: Проверить доступность базы данных
+      tags:
+      - Health
+  /update:
+    post:
+      consumes:
+      - application/json
+      description: Обновляет значение одной метрики, переданной в теле запроса в формате
+        JSON
+      parameters:
+      - description: Метрика для обновления
+        in: body
+        name: metric
+        required: true
+        schema:
+          $ref: '#/definitions/models.Metrics'
+      - description: HMAC-SHA256 подпись тела запроса
+        in: header
+        name: HashSHA256
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Обновлённая метрика
+          schema:
+            $ref: '#/definitions/models.Metrics'
+        "400":
+          description: Некорректный JSON или неверная подпись
+          schema:
+            type: string
+        "500":
+          description: Ошибка сохранения метрики
+          schema:
+            type: string
+      summary: Обновить метрику в формате JSON
+      tags:
+      - Metrics
+  /update/{type}/{name}/{value}:
+    post:
+      consumes:
+      - text/plain
+      description: Обновляет значение метрики по параметрам в URL пути
+      parameters:
+      - description: Тип метрики (gauge или counter)
+        in: path
+        name: type
+        required: true
+        type: string
+      - description: Имя метрики
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Значение метрики
+        in: path
+        name: value
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Метрика успешно обновлена
+          schema:
+            type: string
+        "400":
+          description: Некорректные параметры запроса
+          schema:
+            type: string
+        "501":
+          description: Неизвестный тип метрики
+          schema:
+            type: string
+      summary: Обновить метрику через URL
+      tags:
+      - Metrics
+  /updates/:
+    post:
+      consumes:
+      - application/json
+      description: Обновляет несколько метрик за один запрос, переданных в теле запроса
+        в формате JSON
+      parameters:
+      - description: Массив метрик для обновления
+        in: body
+        name: metrics
+        required: true
+        schema:
+          items:
+            $ref: '#/definitions/models.Metrics'
+          type: array
+      - description: HMAC-SHA256 подпись тела запроса
+        in: header
+        name: HashSHA256
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Массив обновлённых метрик
+          schema:
+            items:
+              $ref: '#/definitions/models.Metrics'
+            type: array
+        "400":
+          description: Некорректный JSON или неверная подпись
+          schema:
+            type: string
+        "500":
+          description: Ошибка сохранения метрик
+          schema:
+            type: string
+      summary: Пакетное обновление метрик
+      tags:
+      - Metrics
+  /value:
+    post:
+      consumes:
+      - application/json
+      description: Возвращает значение метрики по имени и типу, переданным в теле
+        запроса
+      parameters:
+      - description: Запрос метрики (id и type обязательны)
+        in: body
+        name: metric
+        required: true
+        schema:
+          $ref: '#/definitions/models.Metrics'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Метрика со значением
+          schema:
+            $ref: '#/definitions/models.Metrics'
+        "400":
+          description: Некорректный JSON
+          schema:
+            type: string
+        "404":
+          description: Метрика не найдена
+          schema:
+            type: string
+      summary: Получить значение метрики в формате JSON
+      tags:
+      - Metrics
+  /value/{type}/{name}:
+    get:
+      description: Возвращает значение метрики в виде текста
+      parameters:
+      - description: Тип метрики (gauge или counter)
+        in: path
+        name: type
+        required: true
+        type: string
+      - description: Имя метрики
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Значение метрики
+          schema:
+            type: string
+        "400":
+          description: Некорректный тип метрики
+          schema:
+            type: string
+        "404":
+          description: Метрика не найдена
+          schema:
+            type: string
+      summary: Получить значение метрики через URL
+      tags:
+      - Metrics
+schemes:
+- http
+swagger: "2.0"

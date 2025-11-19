@@ -8,23 +8,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mockNetAddr — мок-реализация интерфейса AddrSetter для тестирования.
+// Позволяет эмулировать установку значения адреса и возвращать ошибку при необходимости.
 type mockNetAddr struct {
-	setValue string
-	err      error
+	setValue string // Последнее установленное значение
+	err      error  // Ошибка, которую нужно вернуть при вызове Set
 }
 
+// Set устанавливает значение адреса и возвращает ошибку, если она задана.
 func (m *mockNetAddr) Set(val string) error {
 	m.setValue = val
 	return m.err
 }
 
+// TestEnvInt тестирует функцию EnvInt на корректность обработки различных значений переменных окружения.
+//
+// Проверяются следующие сценарии:
+//   - Корректное целое число
+//   - Пустое значение переменной окружения
+//   - Некорректное (нечисловое) значение
 func TestEnvInt(t *testing.T) {
 	tests := []struct {
-		name     string
-		envKey   string
-		envValue string
-		expected int
-		wantErr  bool
+		name     string // Название теста
+		envKey   string // Имя переменной окружения
+		envValue string // Значение переменной окружения
+		expected int    // Ожидаемое значение результата
+		wantErr  bool   // Ожидается ли ошибка
 	}{
 		{
 			name:     "valid integer",
@@ -51,6 +60,7 @@ func TestEnvInt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Устанавливаем или сбрасываем переменную окружения в зависимости от теста
 			if tt.envValue != "" || tt.name == "empty value" {
 				os.Setenv(tt.envKey, tt.envValue)
 				defer os.Unsetenv(tt.envKey)
@@ -69,13 +79,19 @@ func TestEnvInt(t *testing.T) {
 	}
 }
 
+// TestEnvServer тестирует функцию EnvServer на корректность установки адреса из переменной окружения.
+//
+// Проверяются следующие сценарии:
+//   - Корректное значение адреса
+//   - Ошибка при установке адреса (мок возвращает ошибку)
+//   - Переменная окружения не установлена
 func TestEnvServer(t *testing.T) {
 	tests := []struct {
-		name      string
-		envKey    string
-		envValue  string
-		setErr    error
-		expectErr bool
+		name      string // Название теста
+		envKey    string // Имя переменной окружения
+		envValue  string // Значение переменной окружения
+		setErr    error  // Ошибка, которую должен вернуть Set
+		expectErr bool   // Ожидается ли ошибка
 	}{
 		{
 			name:      "valid address",
@@ -102,6 +118,7 @@ func TestEnvServer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Устанавливаем или сбрасываем переменную окружения в зависимости от теста
 			if tt.envValue != "" {
 				os.Setenv(tt.envKey, tt.envValue)
 				defer os.Unsetenv(tt.envKey)

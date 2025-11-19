@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
+	_ "net/http/pprof"
 	"runtime"
 	"sync"
 	"time"
@@ -24,29 +26,52 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
+var (
+	// gzipPool — пул для переиспользования gzip.Writer, чтобы уменьшить аллокации при сжатии данных.
+	gzipPool = sync.Pool{
+		New: func() interface{} {
+			// создаём writer, привязанный к io.Discard — он будет Reset-ом перенастроен перед использованием
+			return gzip.NewWriter(io.Discard)
+		},
+	}
+
+	// bufPool — пул для переиспользования bytes.Buffer при формировании тела запроса.
+	bufPool = sync.Pool{
+		New: func() interface{} {
+			return new(bytes.Buffer)
+		},
+	}
+)
+
+// Metric — структура для хранения метрики (тип и значение).
 type Metric struct {
-	Type  string
-	Value float64
+	Type  string  // Тип метрики: "gauge" или "counter"
+	Value float64 // Значение метрики
 }
 
+// MetricsSender — интерфейс для отправки батча метрик.
 type MetricsSender interface {
+	// SendBatch отправляет срез метрик на сервер.
 	SendBatch(metrics []models.Metrics) error
 }
 
+// Config — конфигурация агента.
 type Config struct {
-	PollInterval   int
-	ReportInterval int
-	RateLimit      int
-	Key            string
+	PollInterval   int    // Интервал опроса метрик (сек)
+	ReportInterval int    // Интервал отправки метрик (сек)
+	RateLimit      int    // Ограничение на количество параллельных отправок
+	Key            string // Ключ для подписи запросов
 }
 
+// MetricsCollector — сборщик метрик, хранит значения и счетчик опросов.
 type MetricsCollector struct {
-	metrics   map[string]Metric
-	pollCount int64
-	rng       *rand.Rand
-	mu        sync.RWMutex
+	metrics   map[string]Metric // Собранные метрики
+	pollCount int64             // Счетчик опросов
+	rng       *rand.Rand        // Генератор случайных чисел
+	mu        sync.RWMutex      // Мьютекс для конкурентного доступа
 }
 
+// AgentState — состояние агента, включает конфиг, сборщик, отправителя и очередь заданий.
 type AgentState struct {
 	Config    Config
 	Collector *MetricsCollector
@@ -54,6 +79,9 @@ type AgentState struct {
 	jobQueue  chan []models.Metrics
 }
 
+// collectMetrics собирает метрики из runtime и обновляет их в коллекторе.
+//
+// state — текущее состояние агента.
 func collectMetrics(state *AgentState) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -100,6 +128,7 @@ func collectMetrics(state *AgentState) {
 	state.Collector.metrics["RandomValue"] = Metric{"gauge", state.Collector.rng.Float64() * 100}
 }
 
+// collectSystemMetrics собирает системные метрики (память, CPU) и обновляет их в коллекторе.
 func (c *MetricsCollector) collectSystemMetrics() {
 	updates := make(map[string]Metric)
 
@@ -122,6 +151,10 @@ func (c *MetricsCollector) collectSystemMetrics() {
 	c.mu.Unlock()
 }
 
+// buildBatchSnapshot формирует срез метрик для отправки (снимок текущего состояния).
+//
+// state — текущее состояние агента.
+// Возвращает срез моделей метрик для отправки.
 func buildBatchSnapshot(state *AgentState) []models.Metrics {
 	state.Collector.mu.RLock()
 	defer state.Collector.mu.RUnlock()
@@ -144,6 +177,9 @@ func buildBatchSnapshot(state *AgentState) []models.Metrics {
 	return batch
 }
 
+// sendMetrics отправляет батч метрик через Sender.
+//
+// state — текущее состояние агента.
 func sendMetrics(state *AgentState) {
 	batch := buildBatchSnapshot(state)
 	if len(batch) == 0 {
@@ -154,6 +190,9 @@ func sendMetrics(state *AgentState) {
 	}
 }
 
+// startWorkerPool запускает пул воркеров для параллельной отправки метрик.
+//
+// state — текущее состояние агента.
 func startWorkerPool(state *AgentState) {
 	if state.Config.RateLimit <= 0 {
 		state.Config.RateLimit = 1
@@ -172,37 +211,60 @@ func startWorkerPool(state *AgentState) {
 	}
 }
 
+// RestySender реализует MetricsSender, отправляя метрики через resty.Client.
 type RestySender struct {
-	Client *resty.Client
-	Key    string
+	Client *resty.Client // HTTP-клиент
+	Key    string        // Ключ для подписи
 }
 
+// SendBatch сжимает, подписывает и отправляет батч метрик на сервер.
+//
+// metrics — срез метрик для отправки.
+// Возвращает ошибку при неудаче.
 func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	body, err := json.Marshal(metrics)
 	if err != nil {
 		return err
 	}
 
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+
+	gz := gzipPool.Get().(*gzip.Writer)
+	gz.Reset(buf)
+
 	if _, err := gz.Write(body); err != nil {
+		// вернуть объекты в пул перед выходом
+		gz.Reset(io.Discard)
+		gzipPool.Put(gz)
+		buf.Reset()
+		bufPool.Put(buf)
 		return fmt.Errorf("failed to write gzip: %w", err)
 	}
 	if err := gz.Close(); err != nil {
+		gz.Reset(io.Discard)
+		gzipPool.Put(gz)
+		buf.Reset()
+		bufPool.Put(buf)
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
+
+	// Содержимое сжатого буфера
+	compressed := make([]byte, buf.Len())
+	copy(compressed, buf.Bytes())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	return config.RetryWithBackoff(ctx, func() error {
+	// Выполняем POST с повторными попытками
+	err = config.RetryWithBackoff(ctx, func() error {
 		req := rs.Client.R().
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
-			SetBody(buf.Bytes())
+			SetBody(compressed)
 
 		if rs.Key != "" {
-			hash := computeHMACSHA256(buf.Bytes(), rs.Key)
+			hash := computeHMACSHA256(compressed, rs.Key)
 			req.SetHeader("HashSHA256", hash)
 		}
 
@@ -215,14 +277,30 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 		}
 		return nil
 	})
+
+	// Сбрасываем и возвращаем объекты в пул
+	gz.Reset(io.Discard)
+	gzipPool.Put(gz)
+	buf.Reset()
+	bufPool.Put(buf)
+
+	return err
 }
 
+// computeHMACSHA256 вычисляет HMAC-SHA256 для данных с заданным ключом.
+//
+// data — данные для подписи.
+// key — ключ для HMAC.
+// Возвращает hex-строку подписи.
 func computeHMACSHA256(data []byte, key string) string {
 	h := hmac.New(sha256.New, []byte(key))
 	h.Write(data)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// parseFlags парсит флаги командной строки и переменные окружения, возвращает адрес сервера и состояние агента.
+//
+// Возвращает указатель на сетевой адрес и состояние агента.
 func parseFlags() (*config.NetAddress, *AgentState) {
 	addr := config.ParseAddressFlag()
 	poll := flag.Int("p", 2, "Poll interval in seconds")
@@ -247,7 +325,7 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 		keyValue = *key
 	}
 
-	config := Config{
+	cfg := Config{
 		PollInterval:   *poll,
 		ReportInterval: *report,
 		RateLimit:      *limit,
@@ -261,13 +339,14 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 	}
 
 	state := &AgentState{
-		Config:    config,
+		Config:    cfg,
 		Collector: collector,
 	}
 
 	return addr, state
 }
 
+// main — точка входа агента. Запускает сбор метрик, воркеры и отправку на сервер.
 func main() {
 	addr, state := parseFlags()
 
@@ -292,6 +371,15 @@ func main() {
 
 	startWorkerPool(state)
 
+	// Запуск pprof-сервера для профилирования
+	go func() {
+		log.Println("pprof http server listening on :6060")
+		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+			log.Printf("pprof server failed: %v", err)
+		}
+	}()
+
+	// Периодический сбор метрик runtime
 	go func(pollSec int) {
 		t := time.NewTicker(time.Duration(pollSec) * time.Second)
 		defer t.Stop()
@@ -300,6 +388,7 @@ func main() {
 		}
 	}(state.Config.PollInterval)
 
+	// Периодический сбор системных метрик
 	go func(pollSec int) {
 		t := time.NewTicker(time.Duration(pollSec) * time.Second)
 		defer t.Stop()
@@ -308,6 +397,7 @@ func main() {
 		}
 	}(state.Config.PollInterval)
 
+	// Периодическая отправка метрик
 	reportTicker := time.NewTicker(time.Duration(state.Config.ReportInterval) * time.Second)
 	defer reportTicker.Stop()
 
