@@ -27,6 +27,13 @@ import (
 )
 
 var (
+	// buildVersion — версия сборки приложения.
+	buildVersion string
+	// buildDate — дата сборки приложения.
+	buildDate string
+	// buildCommit — хеш коммита сборки.
+	buildCommit string
+
 	// gzipPool — пул для переиспользования gzip.Writer, чтобы уменьшить аллокации при сжатии данных.
 	gzipPool = sync.Pool{
 		New: func() interface{} {
@@ -348,6 +355,8 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 
 // main — точка входа агента. Запускает сбор метрик, воркеры и отправку на сервер.
 func main() {
+	printBuildInfo()
+
 	addr, state := parseFlags()
 
 	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
@@ -408,4 +417,24 @@ func main() {
 		}
 		state.jobQueue <- batch
 	}
+}
+
+// printBuildInfo выводит информацию о сборке приложения.
+func printBuildInfo() {
+	version := "N/A"
+	if buildVersion != "" {
+		version = buildVersion
+	}
+	date := "N/A"
+	if buildDate != "" {
+		date = buildDate
+	}
+	commit := "N/A"
+	if buildCommit != "" {
+		commit = buildCommit
+	}
+
+	fmt.Printf("Build version: %s\n", version)
+	fmt.Printf("Build date: %s\n", date)
+	fmt.Printf("Build commit: %s\n", commit)
 }

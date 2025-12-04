@@ -27,12 +27,42 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var (
+	// buildVersion — версия сборки приложения.
+	buildVersion string
+	// buildDate — дата сборки приложения.
+	buildDate string
+	// buildCommit — хеш коммита сборки.
+	buildCommit string
+)
+
 // main — точка входа в приложение сервера метрик.
 // Инициализирует и запускает сервер, логирует фатальные ошибки при запуске.
 func main() {
+	printBuildInfo()
 	if err := run(); err != nil {
 		log.Fatalf("server failed to start: %v", err)
 	}
+}
+
+// printBuildInfo выводит информацию о сборке приложения.
+func printBuildInfo() {
+	version := "N/A"
+	if buildVersion != "" {
+		version = buildVersion
+	}
+	date := "N/A"
+	if buildDate != "" {
+		date = buildDate
+	}
+	commit := "N/A"
+	if buildCommit != "" {
+		commit = buildCommit
+	}
+
+	fmt.Printf("Build version: %s\n", version)
+	fmt.Printf("Build date: %s\n", date)
+	fmt.Printf("Build commit: %s\n", commit)
 }
 
 // run выполняет основную инициализацию и запуск HTTP-сервера.
