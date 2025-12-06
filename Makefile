@@ -10,7 +10,7 @@ COVERAGE_AGENT=$(PROFILES_DIR)/coverage-agent.out
 VERSION?=dev
 BUILD_DATE=$(shell date -u '+%Y-%m-%d_%H:%M:%S') # UTC
 BUILD_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown") # Короткий хеш коммита
-LDFLAGS=-ldflags "-X main.buildVersion=$(VERSION) -X main.buildDate=$(BUILD_DATE) -X main.buildCommit=$(BUILD_COMMIT)" # Флаги для передачи информации о сборке
+LDFLAGS=-ldflags "-X github.com/RoGogDBD/metric-alerter/internal/version.buildVersion=$(VERSION) -X github.com/RoGogDBD/metric-alerter/internal/version.buildDate=$(BUILD_DATE) -X github.com/RoGogDBD/metric-alerter/internal/version.buildCommit=$(BUILD_COMMIT)" # Флаги для передачи информации о сборке
 
 .PHONY: all test build clean test-server test-agent cover generate build-with-version
 

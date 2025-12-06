@@ -40,30 +40,40 @@ type structInfo struct {
 // "BURN_BABY_BURN" - Apollo 11.
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// run выполняет основную логику генератора.
-//
-// Сканирует все пакеты проекта, находит структуры с маркером generate:reset
-// и генерирует для них методы Reset() в файлах reset.gen.go.
-//
-// Возвращает ошибку при неудаче сканирования или генерации.
-func run() error {
-	// Корневая директория проекта (текущая директория).
-	rootDir := "."
+type (
+	// Scanner сканирует директории в поисках .go файлов.
+	Scanner interface {
+		Scan(rootDir string) ([]string, error)
+	}
 
-	// Находим все пакеты со структурами, которым нужен метод Reset().
-	packagesToGenerate := make(map[string][]structInfo)
+	// Parser парсит файлы и извлекает информацию о структурах.
+	Parser interface {
+		Parse(filePath string) ([]structInfo, error)
+	}
+
+	// Generator генерирует код для структур.
+	Generator interface {
+		Generate(pkgDir string, structs []structInfo) error
+	}
+)
+
+// fileScanner реализует Scanner для поиска .go файлов.
+type fileScanner struct{}
+
+func (s *fileScanner) Scan(rootDir string) ([]string, error) {
+	var files []string
 
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Пропускаем директории vendor, .git и сгенерированные файлы.
+		// Пропускаем директории vendor, .git.
 		if info.IsDir() {
 			if info.Name() == "vendor" || info.Name() == ".git" {
 				return filepath.SkipDir
@@ -71,52 +81,26 @@ func run() error {
 			return nil
 		}
 
-		// Обрабатываем только .go файлы (кроме сгененых).
+		// Обрабатываем только .go файлы (кроме сгенерированных).
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, ".gen.go") {
 			return nil
 		}
 
-		structs, err := findStructsWithResetComment(path)
-		if err != nil {
-			return fmt.Errorf("failed to parse %s: %w", path, err)
-		}
-
-		if len(structs) > 0 {
-			dir := filepath.Dir(path)
-			packagesToGenerate[dir] = append(packagesToGenerate[dir], structs...)
-		}
-
+		files = append(files, path)
 		return nil
 	})
 
-	if err != nil {
-		return fmt.Errorf("failed to walk directory: %w", err)
-	}
-
-	// Генерируем файлы reset.gen.go для каждого пакета
-	for pkgDir, structs := range packagesToGenerate {
-		if err := generateResetFile(pkgDir, structs); err != nil {
-			return fmt.Errorf("failed to generate reset file for %s: %w", pkgDir, err)
-		}
-		fmt.Printf("Generated reset.gen.go for package %s\n", pkgDir)
-	}
-
-	if len(packagesToGenerate) == 0 {
-		fmt.Println("No structs with // generate:reset comment found")
-	}
-
-	return nil
+	return files, err
 }
 
-// findStructsWithResetComment находит все структуры в файле с комментарием generate:reset.
-//
-// filename — путь к .go файлу для анализа.
-//
-// Возвращает список структур с информацией о полях и саму ошибку парсинга, если есть.
-func findStructsWithResetComment(filename string) ([]structInfo, error) {
+// resetParser реализует Parser для поиска структур с комментарием generate:reset.
+type resetParser struct{}
+
+// Parse находит все структуры в файле с комментарием generate:reset.
+func (p *resetParser) Parse(filePath string) ([]structInfo, error) {
 	// Парсим файл.
 	fset := token.NewFileSet()
-	node, err := parser.ParseFile(fset, filename, nil, parser.ParseComments)
+	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 	if err != nil {
 		return nil, err
 	}
@@ -191,15 +175,13 @@ func findStructsWithResetComment(filename string) ([]structInfo, error) {
 	return structs, nil
 }
 
-// generateResetFile генерирует файл reset.gen.go с методами Reset() для структур пакета.
-//
-// pkgDir — директория пакета.
-// structs — список структур для генерации методов.
-//
-// Возвращает ошибку при неудаче генерации или записи файла.
-func generateResetFile(pkgDir string, structs []structInfo) error {
+// resetGenerator реализует Generator для создания файлов reset.gen.go.
+type resetGenerator struct{}
+
+// Generate генерирует файл reset.gen.go с методами Reset() для структур пакета.
+func (g *resetGenerator) Generate(pkgDir string, structs []structInfo) error {
 	// Получаем имя пакета из существующих файлов.
-	pkgName, err := getPackageName(pkgDir)
+	pkgName, err := g.getPackageName(pkgDir)
 	if err != nil {
 		return err
 	}
@@ -207,7 +189,7 @@ func generateResetFile(pkgDir string, structs []structInfo) error {
 	// Собираем необходимые импорты.
 	imports := make(map[string]bool)
 	for _, s := range structs {
-		collectImports(s.fields, imports)
+		g.collectImports(s.fields, imports)
 	}
 
 	var buf bytes.Buffer
@@ -227,7 +209,7 @@ func generateResetFile(pkgDir string, structs []structInfo) error {
 
 	// Генерируем метод Reset() для каждой структуры.
 	for _, s := range structs {
-		buf.WriteString(generateResetMethod(s))
+		buf.WriteString(g.generateResetMethod(s))
 		buf.WriteString("\n")
 	}
 
@@ -248,20 +230,14 @@ func generateResetFile(pkgDir string, structs []structInfo) error {
 }
 
 // collectImports собирает импорты, необходимые для полей структуры.
-//
-// fields — список полей структуры.
-// imports — карта для сохранения найденных импортов.
-func collectImports(fields []*ast.Field, imports map[string]bool) {
+func (g *resetGenerator) collectImports(fields []*ast.Field, imports map[string]bool) {
 	for _, field := range fields {
-		collectImportsFromType(field.Type, imports)
+		g.collectImportsFromType(field.Type, imports)
 	}
 }
 
 // collectImportsFromType рекурсивно собирает импорты из AST-узла типа.
-//
-// expr — AST-узел типа для анализа.
-// imports — карта для сохранения найденных импортов.
-func collectImportsFromType(expr ast.Expr, imports map[string]bool) {
+func (g *resetGenerator) collectImportsFromType(expr ast.Expr, imports map[string]bool) {
 	switch t := expr.(type) {
 	case *ast.SelectorExpr:
 		// Квалифицированный идентификатор вроде time.Time.
@@ -277,46 +253,49 @@ func collectImportsFromType(expr ast.Expr, imports map[string]bool) {
 			}
 		}
 	case *ast.StarExpr:
-		collectImportsFromType(t.X, imports)
+		g.collectImportsFromType(t.X, imports)
 	case *ast.ArrayType:
-		collectImportsFromType(t.Elt, imports)
+		g.collectImportsFromType(t.Elt, imports)
 	case *ast.MapType:
-		collectImportsFromType(t.Key, imports)
-		collectImportsFromType(t.Value, imports)
+		g.collectImportsFromType(t.Key, imports)
+		g.collectImportsFromType(t.Value, imports)
 	case *ast.ChanType:
-		collectImportsFromType(t.Value, imports)
+		g.collectImportsFromType(t.Value, imports)
 	}
 }
 
 // getPackageName получает имя пакета из директории.
-//
-// dir — директория пакета.
-//
-// Возвращает имя пакета или ошибку, если пакет не найден.
-func getPackageName(dir string) (string, error) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go") && !strings.HasSuffix(fi.Name(), ".gen.go")
-	}, parser.PackageClauseOnly)
-
+func (g *resetGenerator) getPackageName(dir string) (string, error) {
+	// Ищем .go файлы в директории (исключая тесты и сгенерированные).
+	pattern := filepath.Join(dir, "*.go")
+	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return "", err
 	}
 
-	// Возвращаем первое найденное имя пакета.
-	for name := range pkgs {
-		return name, nil
+	// Парсим первый подходящий файл для получения имени пакета.
+	fset := token.NewFileSet()
+	for _, file := range files {
+		// Пропускаем тестовые и сгенерированные файлы.
+		if strings.HasSuffix(file, "_test.go") || strings.HasSuffix(file, ".gen.go") {
+			continue
+		}
+
+		node, err := parser.ParseFile(fset, file, nil, parser.PackageClauseOnly)
+		if err != nil {
+			continue
+		}
+
+		if node.Name != nil {
+			return node.Name.Name, nil
+		}
 	}
 
 	return "", fmt.Errorf("no package found in directory %s", dir)
 }
 
 // generateResetMethod генерирует текст метода Reset() для структуры.
-//
-// s — информация о структуре (имя и поля).
-//
-// Возвращает текст метода Reset().
-func generateResetMethod(s structInfo) string {
+func (g *resetGenerator) generateResetMethod(s structInfo) string {
 	var buf bytes.Buffer
 
 	buf.WriteString(fmt.Sprintf("func (r *%s) Reset() {\n", s.name))
@@ -332,7 +311,7 @@ func generateResetMethod(s structInfo) string {
 		}
 
 		for _, fieldName := range field.Names {
-			resetCode := generateFieldReset(fieldName.Name, field.Type)
+			resetCode := g.generateFieldReset(fieldName.Name, field.Type)
 			buf.WriteString(resetCode)
 		}
 	}
@@ -343,136 +322,231 @@ func generateResetMethod(s structInfo) string {
 }
 
 // generateFieldReset генерирует код сброса для отдельного поля структуры.
-//
-// fieldName — имя поля.
-// fieldType — AST-узел типа поля.
-//
-// Возвращает текст кода для сброса поля.
-func generateFieldReset(fieldName string, fieldType ast.Expr) string {
-	var buf bytes.Buffer
-
+func (g *resetGenerator) generateFieldReset(fieldName string, fieldType ast.Expr) string {
 	switch t := fieldType.(type) {
 	case *ast.Ident:
-		// Примитивные типы или именованные типы.
-		resetValue := getZeroValue(t.Name)
-		if resetValue != "" {
-			buf.WriteString(fmt.Sprintf("\tr.%s = %s\n", fieldName, resetValue))
-		} else {
-			// Может быть структурой с методом Reset().
-			buf.WriteString(fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n", fieldName))
-			buf.WriteString("\t\tresetter.Reset()\n")
-			buf.WriteString("\t}\n")
-		}
-
+		return g.resetIdentType(fieldName, t)
 	case *ast.StarExpr:
-		// Тип-указатель
-		buf.WriteString(fmt.Sprintf("\tif r.%s != nil {\n", fieldName))
-
-		switch elem := t.X.(type) {
-		case *ast.Ident:
-			// Указатель на базовый тип или именованный тип.
-			resetValue := getZeroValue(elem.Name)
-			if resetValue != "" {
-				buf.WriteString(fmt.Sprintf("\t\t*r.%s = %s\n", fieldName, resetValue))
-			} else {
-				// Указатель на структуру — пытаемся вызвать Reset().
-				buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n", fieldName))
-				buf.WriteString("\t\t\tresetter.Reset()\n")
-				buf.WriteString("\t\t}\n")
-			}
-		case *ast.SelectorExpr:
-			// Указатель на квалифицированный тип (например, *time.Time).
-			buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n", fieldName))
-			buf.WriteString("\t\t\tresetter.Reset()\n")
-			buf.WriteString("\t\t} else {\n")
-			buf.WriteString(fmt.Sprintf("\t\t\t*r.%s = %s{}\n", fieldName, formatType(elem)))
-			buf.WriteString("\t\t}\n")
-		case *ast.StructType:
-			// Указатель на анонимную структуру.
-			buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n", fieldName))
-			buf.WriteString("\t\t\tresetter.Reset()\n")
-			buf.WriteString("\t\t}\n")
-		default:
-			// Прочие типы указателей.
-			buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n", fieldName))
-			buf.WriteString("\t\t\tresetter.Reset()\n")
-			buf.WriteString("\t\t}\n")
-		}
-
-		buf.WriteString("\t}\n")
-
+		return g.resetPointerType(fieldName, t)
 	case *ast.ArrayType:
-		if t.Len == nil {
-			// Слайс
-			buf.WriteString(fmt.Sprintf("\tr.%s = r.%s[:0]\n", fieldName, fieldName))
-		} else {
-			// Массив — сбрасываем каждый элемент.
-			// Для простоты пытаемся вызвать Reset() для элементов массива.
-			// или устанавливаем нулевое значение.
-			buf.WriteString(fmt.Sprintf("\tfor i := range r.%s {\n", fieldName))
-
-			switch elem := t.Elt.(type) {
-			case *ast.Ident:
-				resetValue := getZeroValue(elem.Name)
-				if resetValue != "" {
-					buf.WriteString(fmt.Sprintf("\t\tr.%s[i] = %s\n", fieldName, resetValue))
-				} else {
-					buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(&r.%s[i]).(interface{ Reset() }); ok {\n", fieldName))
-					buf.WriteString("\t\t\tresetter.Reset()\n")
-					buf.WriteString("\t\t}\n")
-				}
-			case *ast.StarExpr:
-				buf.WriteString(fmt.Sprintf("\t\tif r.%s[i] != nil {\n", fieldName))
-				buf.WriteString(fmt.Sprintf("\t\t\tif resetter, ok := interface{}(r.%s[i]).(interface{ Reset() }); ok {\n", fieldName))
-				buf.WriteString("\t\t\t\tresetter.Reset()\n")
-				buf.WriteString("\t\t\t}\n")
-				buf.WriteString("\t\t}\n")
-			default:
-				buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(&r.%s[i]).(interface{ Reset() }); ok {\n", fieldName))
-				buf.WriteString("\t\t\tresetter.Reset()\n")
-				buf.WriteString("\t\t}\n")
-			}
-
-			buf.WriteString("\t}\n")
-		}
-
+		return g.resetArrayType(fieldName, t)
 	case *ast.MapType:
-		// Мапа.
-		buf.WriteString(fmt.Sprintf("\tclear(r.%s)\n", fieldName))
-
+		return g.resetMapType(fieldName)
 	case *ast.ChanType:
-		// Канал — не можем по-настоящему сбросить, оставляем как есть.
-		// Или можно установить в nil, но это может быть нежелательно.
-
+		return g.resetChanType()
 	case *ast.InterfaceType:
-		// Интерфейс — пытаемся вызвать Reset(), если доступен.
-		buf.WriteString(fmt.Sprintf("\tif resetter, ok := r.%s.(interface{ Reset() }); ok && r.%s != nil {\n", fieldName, fieldName))
-		buf.WriteString("\t\tresetter.Reset()\n")
-		buf.WriteString("\t}\n")
-
+		return g.resetInterfaceType(fieldName)
 	case *ast.SelectorExpr:
-		// Квалифицированный тип (например, time.Time).
-		// Пытаемся вызвать Reset() или установить нулевое значение.
-		buf.WriteString(fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n", fieldName))
-		buf.WriteString("\t\tresetter.Reset()\n")
-		buf.WriteString("\t} else {\n")
-		buf.WriteString(fmt.Sprintf("\t\tr.%s = %s{}\n", fieldName, formatType(t)))
-		buf.WriteString("\t}\n")
-
+		return g.resetSelectorType(fieldName, t)
 	case *ast.StructType:
-		// Анонимная структура.
-		buf.WriteString(fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n", fieldName))
-		buf.WriteString("\t\tresetter.Reset()\n")
-		buf.WriteString("\t}\n")
-
+		return g.resetStructType(fieldName)
 	default:
-		// Для прочих типов пытаемся вызвать метод Reset().
-		buf.WriteString(fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n", fieldName))
-		buf.WriteString("\t\tresetter.Reset()\n")
-		buf.WriteString("\t}\n")
+		return g.resetDefaultType(fieldName)
+	}
+}
+
+// resetIdentType обрабатывает примитивные типы и именованные типы.
+func (g *resetGenerator) resetIdentType(fieldName string, t *ast.Ident) string {
+	resetValue := getZeroValue(t.Name)
+	if resetValue != "" {
+		return fmt.Sprintf("\tr.%s = %s\n", fieldName, resetValue)
+	}
+	// Может быть структурой с методом Reset().
+	return fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\tresetter.Reset()\n"+
+		"\t}\n", fieldName)
+}
+
+// resetPointerType обрабатывает указатели.
+func (g *resetGenerator) resetPointerType(fieldName string, t *ast.StarExpr) string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("\tif r.%s != nil {\n", fieldName))
+
+	switch elem := t.X.(type) {
+	case *ast.Ident:
+		buf.WriteString(g.resetPointerToIdent(fieldName, elem))
+	case *ast.SelectorExpr:
+		buf.WriteString(g.resetPointerToSelector(fieldName, elem))
+	case *ast.StructType:
+		buf.WriteString(g.resetPointerToStruct(fieldName))
+	default:
+		buf.WriteString(g.resetPointerToOther(fieldName))
 	}
 
+	buf.WriteString("\t}\n")
 	return buf.String()
+}
+
+// resetPointerToIdent обрабатывает указатель на именованный тип.
+func (g *resetGenerator) resetPointerToIdent(fieldName string, elem *ast.Ident) string {
+	resetValue := getZeroValue(elem.Name)
+	if resetValue != "" {
+		return fmt.Sprintf("\t\t*r.%s = %s\n", fieldName, resetValue)
+	}
+	// Указатель на структуру — пытаемся вызвать Reset().
+	return fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\t\tresetter.Reset()\n"+
+		"\t\t}\n", fieldName)
+}
+
+// resetPointerToSelector обрабатывает указатель на квалифицированный тип (например, *time.Time).
+func (g *resetGenerator) resetPointerToSelector(fieldName string, elem *ast.SelectorExpr) string {
+	return fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\t\tresetter.Reset()\n"+
+		"\t\t} else {\n"+
+		"\t\t\t*r.%s = %s{}\n"+
+		"\t\t}\n", fieldName, fieldName, formatType(elem))
+}
+
+// resetPointerToStruct обрабатывает указатель на анонимную структуру.
+func (g *resetGenerator) resetPointerToStruct(fieldName string) string {
+	return fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\t\tresetter.Reset()\n"+
+		"\t\t}\n", fieldName)
+}
+
+// resetPointerToOther обрабатывает прочие типы указателей.
+func (g *resetGenerator) resetPointerToOther(fieldName string) string {
+	return fmt.Sprintf("\t\tif resetter, ok := interface{}(r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\t\tresetter.Reset()\n"+
+		"\t\t}\n", fieldName)
+}
+
+// resetArrayType обрабатывает массивы и слайсы.
+func (g *resetGenerator) resetArrayType(fieldName string, t *ast.ArrayType) string {
+	if t.Len == nil {
+		// Слайс - просто обрезаем до нулевой длины.
+		return fmt.Sprintf("\tr.%s = r.%s[:0]\n", fieldName, fieldName)
+	}
+	// Массив - сбрасываем каждый элемент.
+	return g.resetArrayElements(fieldName, t)
+}
+
+// resetArrayElements сбрасывает элементы массива.
+func (g *resetGenerator) resetArrayElements(fieldName string, t *ast.ArrayType) string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("\tfor i := range r.%s {\n", fieldName))
+
+	switch elem := t.Elt.(type) {
+	case *ast.Ident:
+		buf.WriteString(g.resetArrayIdentElement(fieldName, elem))
+	case *ast.StarExpr:
+		buf.WriteString(g.resetArrayPointerElement(fieldName))
+	default:
+		buf.WriteString(g.resetArrayDefaultElement(fieldName))
+	}
+
+	buf.WriteString("\t}\n")
+	return buf.String()
+}
+
+// resetArrayIdentElement сбрасывает элемент массива примитивного типа.
+func (g *resetGenerator) resetArrayIdentElement(fieldName string, elem *ast.Ident) string {
+	resetValue := getZeroValue(elem.Name)
+	if resetValue != "" {
+		return fmt.Sprintf("\t\tr.%s[i] = %s\n", fieldName, resetValue)
+	}
+	return fmt.Sprintf("\t\tif resetter, ok := interface{}(&r.%s[i]).(interface{ Reset() }); ok {\n"+
+		"\t\t\tresetter.Reset()\n"+
+		"\t\t}\n", fieldName)
+}
+
+// resetArrayPointerElement сбрасывает элемент массива-указателя.
+func (g *resetGenerator) resetArrayPointerElement(fieldName string) string {
+	return fmt.Sprintf("\t\tif r.%s[i] != nil {\n"+
+		"\t\t\tif resetter, ok := interface{}(r.%s[i]).(interface{ Reset() }); ok {\n"+
+		"\t\t\t\tresetter.Reset()\n"+
+		"\t\t\t}\n"+
+		"\t\t}\n", fieldName, fieldName)
+}
+
+// resetArrayDefaultElement сбрасывает элемент массива другого типа.
+func (g *resetGenerator) resetArrayDefaultElement(fieldName string) string {
+	return fmt.Sprintf("\t\tif resetter, ok := interface{}(&r.%s[i]).(interface{ Reset() }); ok {\n"+
+		"\t\t\tresetter.Reset()\n"+
+		"\t\t}\n", fieldName)
+}
+
+// resetMapType обрабатывает мапы.
+func (g *resetGenerator) resetMapType(fieldName string) string {
+	return fmt.Sprintf("\tclear(r.%s)\n", fieldName)
+}
+
+// resetChanType обрабатывает каналы (не сбрасываются).
+func (g *resetGenerator) resetChanType() string {
+	// Канал — не можем по-настоящему сбросить, оставляем как есть.
+	return ""
+}
+
+// resetInterfaceType обрабатывает интерфейсы.
+func (g *resetGenerator) resetInterfaceType(fieldName string) string {
+	return fmt.Sprintf("\tif resetter, ok := r.%s.(interface{ Reset() }); ok && r.%s != nil {\n"+
+		"\t\tresetter.Reset()\n"+
+		"\t}\n", fieldName, fieldName)
+}
+
+// resetSelectorType обрабатывает квалифицированные типы.
+func (g *resetGenerator) resetSelectorType(fieldName string, t *ast.SelectorExpr) string {
+	return fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\tresetter.Reset()\n"+
+		"\t} else {\n"+
+		"\t\tr.%s = %s{}\n"+
+		"\t}\n", fieldName, fieldName, formatType(t))
+}
+
+// resetStructType обрабатывает анонимные структуры.
+func (g *resetGenerator) resetStructType(fieldName string) string {
+	return fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\tresetter.Reset()\n"+
+		"\t}\n", fieldName)
+}
+
+// resetDefaultType обрабатывает прочие типы.
+func (g *resetGenerator) resetDefaultType(fieldName string) string {
+	return fmt.Sprintf("\tif resetter, ok := interface{}(&r.%s).(interface{ Reset() }); ok {\n"+
+		"\t\tresetter.Reset()\n"+
+		"\t}\n", fieldName)
+}
+
+func run() error {
+	scanner := &fileScanner{}
+	structParser := &resetParser{}
+	generator := &resetGenerator{}
+
+	// Сканируем файлы.
+	files, err := scanner.Scan(".")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	// Парсим файлы и группируем структуры по пакетам.
+	packagesToGenerate := make(map[string][]structInfo)
+
+	for _, file := range files {
+		structs, err := structParser.Parse(file)
+		if err != nil {
+			return fmt.Errorf("failed to parse %s: %w", file, err)
+		}
+
+		if len(structs) > 0 {
+			dir := filepath.Dir(file)
+			packagesToGenerate[dir] = append(packagesToGenerate[dir], structs...)
+		}
+	}
+
+	// Генерируем файлы reset.gen.go для каждого пакета.
+	for pkgDir, structs := range packagesToGenerate {
+		if err := generator.Generate(pkgDir, structs); err != nil {
+			return fmt.Errorf("failed to generate reset file for %s: %w", pkgDir, err)
+		}
+		fmt.Printf("Generated reset.gen.go for package %s\n", pkgDir)
+	}
+
+	if len(packagesToGenerate) == 0 {
+		fmt.Println("No structs with // generate:reset comment found")
+	}
+
+	return nil
 }
 
 // getZeroValue возвращает нулевое значение для примитивного типа.
