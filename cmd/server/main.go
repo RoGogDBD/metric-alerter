@@ -24,12 +24,14 @@ import (
 	"github.com/RoGogDBD/metric-alerter/internal/handler"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/RoGogDBD/metric-alerter/internal/service"
+	"github.com/RoGogDBD/metric-alerter/internal/version"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // main — точка входа в приложение сервера метрик.
 // Инициализирует и запускает сервер, логирует фатальные ошибки при запуске.
 func main() {
+	version.PrintBuildInfo()
 	if err := run(); err != nil {
 		log.Fatalf("server failed to start: %v", err)
 	}

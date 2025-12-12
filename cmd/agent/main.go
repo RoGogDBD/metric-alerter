@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
+	"github.com/RoGogDBD/metric-alerter/internal/version"
 	"github.com/go-resty/resty/v2"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -348,6 +349,8 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 
 // main — точка входа агента. Запускает сбор метрик, воркеры и отправку на сервер.
 func main() {
+	version.PrintBuildInfo()
+
 	addr, state := parseFlags()
 
 	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
