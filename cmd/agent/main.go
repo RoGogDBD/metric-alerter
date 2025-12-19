@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,11 +16,15 @@ import (
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"os/signal"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
+	"github.com/RoGogDBD/metric-alerter/internal/crypto"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/version"
 	"github.com/go-resty/resty/v2"
@@ -58,18 +63,19 @@ type MetricsSender interface {
 
 // Config — конфигурация агента.
 type Config struct {
-	PollInterval   int    // Интервал опроса метрик (сек)
-	ReportInterval int    // Интервал отправки метрик (сек)
-	RateLimit      int    // Ограничение на количество параллельных отправок
-	Key            string // Ключ для подписи запросов
+	PollInterval   int            // Интервал опроса метрик (сек).
+	ReportInterval int            // Интервал отправки метрик (сек).
+	RateLimit      int            // Ограничение на количество параллельных отправок.
+	Key            string         // Ключ для подписи запросов.
+	CryptoKey      *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
 }
 
 // MetricsCollector — сборщик метрик, хранит значения и счетчик опросов.
 type MetricsCollector struct {
-	metrics   map[string]Metric // Собранные метрики
-	pollCount int64             // Счетчик опросов
-	rng       *rand.Rand        // Генератор случайных чисел
-	mu        sync.RWMutex      // Мьютекс для конкурентного доступа
+	metrics   map[string]Metric // Собранные метрики.
+	pollCount int64             // Счетчик опросов.
+	rng       *rand.Rand        // Генератор случайных чисел.
+	mu        sync.RWMutex      // Мьютекс для конкурентного доступа.
 }
 
 // AgentState — состояние агента, включает конфиг, сборщик, отправителя и очередь заданий.
@@ -214,11 +220,12 @@ func startWorkerPool(state *AgentState) {
 
 // RestySender реализует MetricsSender, отправляя метрики через resty.Client.
 type RestySender struct {
-	Client *resty.Client // HTTP-клиент
-	Key    string        // Ключ для подписи
+	Client    *resty.Client  // HTTP-клиент.
+	Key       string         // Ключ для подписи.
+	CryptoKey *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
 }
 
-// SendBatch сжимает, подписывает и отправляет батч метрик на сервер.
+// SendBatch сжимает, подписывает, шифрует и отправляет батч метрик на сервер.
 //
 // metrics — срез метрик для отправки.
 // Возвращает ошибку при неудаче.
@@ -235,7 +242,6 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	gz.Reset(buf)
 
 	if _, err := gz.Write(body); err != nil {
-		// вернуть объекты в пул перед выходом
 		gz.Reset(io.Discard)
 		gzipPool.Put(gz)
 		buf.Reset()
@@ -250,22 +256,40 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
-	// Содержимое сжатого буфера
+	// Содержимое сжатого буфера.
 	compressed := make([]byte, buf.Len())
 	copy(compressed, buf.Bytes())
+
+	// Шифруем сжатые данные, если задан публичный ключ.
+	dataToSend := compressed
+	if rs.CryptoKey != nil {
+		encrypted, err := crypto.EncryptData(compressed, rs.CryptoKey)
+		if err != nil {
+			gz.Reset(io.Discard)
+			gzipPool.Put(gz)
+			buf.Reset()
+			bufPool.Put(buf)
+			return fmt.Errorf("failed to encrypt data: %w", err)
+		}
+		dataToSend = encrypted
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Выполняем POST с повторными попытками
+	// Выполняем POST с повторными попытками.
 	err = config.RetryWithBackoff(ctx, func() error {
 		req := rs.Client.R().
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
-			SetBody(compressed)
+			SetBody(dataToSend)
+
+		if rs.CryptoKey != nil {
+			req.SetHeader("X-Encrypted", "true")
+		}
 
 		if rs.Key != "" {
-			hash := computeHMACSHA256(compressed, rs.Key)
+			hash := computeHMACSHA256(dataToSend, rs.Key)
 			req.SetHeader("HashSHA256", hash)
 		}
 
@@ -279,7 +303,7 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 		return nil
 	})
 
-	// Сбрасываем и возвращаем объекты в пул
+	// Сбрасываем и возвращаем объекты в пул.
 	gz.Reset(io.Discard)
 	gzipPool.Put(gz)
 	buf.Reset()
@@ -308,6 +332,7 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 	report := flag.Int("r", 10, "Report interval in seconds")
 	key := flag.String("k", "", "Key for signing requests")
 	limit := flag.Int("l", 1, "Rate limit (max concurrent outgoing requests)")
+	cryptoKey := flag.String("crypto-key", "", "Path to public key for asymmetric encryption")
 
 	flag.Parse()
 
@@ -326,11 +351,26 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 		keyValue = *key
 	}
 
+	cryptoKeyPath := config.EnvString("CRYPTO_KEY")
+	if cryptoKeyPath == "" {
+		cryptoKeyPath = *cryptoKey
+	}
+
+	var publicKey *rsa.PublicKey
+	if cryptoKeyPath != "" {
+		var err error
+		publicKey, err = crypto.LoadPublicKey(cryptoKeyPath)
+		if err != nil {
+			log.Fatalf("failed to load public key: %v", err)
+		}
+	}
+
 	cfg := Config{
 		PollInterval:   *poll,
 		ReportInterval: *report,
 		RateLimit:      *limit,
 		Key:            keyValue,
+		CryptoKey:      publicKey,
 	}
 
 	collector := &MetricsCollector{
@@ -368,11 +408,16 @@ func main() {
 		SetRetryWaitTime(500 * time.Millisecond)
 
 	state.Sender = &RestySender{
-		Client: restyClient,
-		Key:    state.Config.Key,
+		Client:    restyClient,
+		Key:       state.Config.Key,
+		CryptoKey: state.Config.CryptoKey,
 	}
 
 	startWorkerPool(state)
+
+	// Канал для сигналов завершения
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 
 	// Запуск pprof-сервера для профилирования
 	go func() {
@@ -383,32 +428,75 @@ func main() {
 	}()
 
 	// Периодический сбор метрик runtime
+	pollCtx, pollCancel := context.WithCancel(context.Background())
 	go func(pollSec int) {
 		t := time.NewTicker(time.Duration(pollSec) * time.Second)
 		defer t.Stop()
-		for range t.C {
-			collectMetrics(state)
+		for {
+			select {
+			case <-t.C:
+				collectMetrics(state)
+			case <-pollCtx.Done():
+				return
+			}
 		}
 	}(state.Config.PollInterval)
 
 	// Периодический сбор системных метрик
+	sysCtx, sysCancel := context.WithCancel(context.Background())
 	go func(pollSec int) {
 		t := time.NewTicker(time.Duration(pollSec) * time.Second)
 		defer t.Stop()
-		for range t.C {
-			state.Collector.collectSystemMetrics()
+		for {
+			select {
+			case <-t.C:
+				state.Collector.collectSystemMetrics()
+			case <-sysCtx.Done():
+				return
+			}
 		}
 	}(state.Config.PollInterval)
 
-	// Периодическая отправка метрик
+	// Периодическая отправка метрик с поддержкой graceful shutdown
 	reportTicker := time.NewTicker(time.Duration(state.Config.ReportInterval) * time.Second)
 	defer reportTicker.Stop()
 
-	for range reportTicker.C {
-		batch := buildBatchSnapshot(state)
-		if len(batch) == 0 {
-			continue
+	log.Println("Agent started. Waiting for signals...")
+
+	for {
+		select {
+		case <-reportTicker.C:
+			batch := buildBatchSnapshot(state)
+			if len(batch) == 0 {
+				continue
+			}
+			state.jobQueue <- batch
+
+		case sig := <-sigChan:
+			log.Printf("Received signal: %v. Starting graceful shutdown...\n", sig)
+
+			// Отправляем последний батч метрик
+			finalBatch := buildBatchSnapshot(state)
+			if len(finalBatch) > 0 {
+				log.Printf("Sending final batch of %d metrics...\n", len(finalBatch))
+				state.jobQueue <- finalBatch
+				// Даём время на отправку
+				time.Sleep(2 * time.Second)
+			}
+
+			// Останавливаем горутины сбора метрик
+			pollCancel()
+			sysCancel()
+
+			// Закрываем очередь заданий
+			close(state.jobQueue)
+
+			// Даём время на обработку оставшихся заданий в очереди
+			log.Println("Waiting for pending requests to complete...")
+			time.Sleep(3 * time.Second)
+
+			log.Println("Agent shutdown complete")
+			return
 		}
-		state.jobQueue <- batch
 	}
 }

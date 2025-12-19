@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"flag"
 	"fmt"
 	"log"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/RoGogDBD/metric-alerter/internal/config/db"
+	"github.com/RoGogDBD/metric-alerter/internal/crypto"
 	"github.com/RoGogDBD/metric-alerter/internal/handler"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/RoGogDBD/metric-alerter/internal/service"
@@ -38,7 +40,6 @@ func main() {
 }
 
 // run выполняет основную инициализацию и запуск HTTP-сервера.
-//
 // Возвращает ошибку при неудаче запуска или инициализации.
 func run() error {
 	// Инициализация логгера с уровнем info
@@ -54,6 +55,7 @@ func run() error {
 	fileStorageFlag := flag.String("f", "metrics.json", "File storage path")
 	restoreFlag := flag.Bool("r", true, "Restore metrics from file at startup")
 	keyFlag := flag.String("k", "", "Key for request signing verification")
+	cryptoKeyFlag := flag.String("crypto-key", "", "Path to private key for asymmetric decryption")
 	auditFileFlag := flag.String("audit-file", "", "Path to audit log file")
 	auditURLFlag := flag.String("audit-url", "", "URL for remote audit server")
 	addr := config.ParseAddressFlag()
@@ -62,8 +64,19 @@ func run() error {
 	// Получение значений из переменных окружения или флагов
 	dsn := repository.GetEnvOrFlagString("DATABASE_DSN", *dsnFlag)
 	key := repository.GetEnvOrFlagString("KEY", *keyFlag)
+	cryptoKeyPath := repository.GetEnvOrFlagString("CRYPTO_KEY", *cryptoKeyFlag)
 	auditFile := repository.GetEnvOrFlagString("AUDIT_FILE", *auditFileFlag)
 	auditURL := repository.GetEnvOrFlagString("AUDIT_URL", *auditURLFlag)
+
+	// Загружаем приватный ключ если указан
+	var privateKey *rsa.PrivateKey
+	if cryptoKeyPath != "" {
+		var err error
+		privateKey, err = crypto.LoadPrivateKey(cryptoKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load private key: %w", err)
+		}
+	}
 
 	// Инициализация менеджера аудита и добавление наблюдателей
 	auditManager := repository.NewAuditManager()
@@ -91,6 +104,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		defer dbPool.Close()
 	} else {
 		log.Println("No DSN provided, database features disabled")
 	}
@@ -102,9 +116,10 @@ func run() error {
 
 	// Инициализация хранилища и обработчика HTTP-запросов
 	storage := repository.NewMemStorage()
-	handler := handler.NewHandler(storage, dbPool)
-	handler.SetKey(key)
-	handler.SetAuditManager(auditManager)
+	h := handler.NewHandler(storage, dbPool)
+	h.SetKey(key)
+	h.SetCryptoKey(privateKey)
+	h.SetAuditManager(auditManager)
 
 	// Восстановление метрик из файла при необходимости
 	if restore {
@@ -114,7 +129,7 @@ func run() error {
 	}
 
 	// Создание маршрутизатора HTTP-запросов
-	r := service.NewRouter(handler, storage, storeInterval, fileStoragePath, logger)
+	r := service.NewRouter(h, storage, storeInterval, fileStoragePath, logger)
 
 	// Применение адреса сервера из переменной окружения, если задано
 	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
@@ -123,5 +138,55 @@ func run() error {
 
 	log.Printf("Using address: %s\n", addr.String())
 	fmt.Println("Server started")
-	return http.ListenAndServe(addr.String(), r)
+
+	// Создание HTTP сервера
+	srv := &http.Server{
+		Addr:    addr.String(),
+		Handler: r,
+	}
+
+	// Канал для сигналов завершения
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+
+	// Канал для ошибок сервера
+	errChan := make(chan error, 1)
+
+	// Запуск сервера в отдельной горутине
+	go func() {
+		log.Printf("Server listening on %s\n", srv.Addr)
+		errChan <- srv.ListenAndServe()
+	}()
+
+	// Ожидание либо сигнала завершения, либо ошибки сервера
+	select {
+	case err := <-errChan:
+		if err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("server error: %w", err)
+		}
+	case sig := <-sigChan:
+		log.Printf("Received signal: %v. Starting graceful shutdown...\n", sig)
+
+		// Сохраняем все несохранённые метрики
+		log.Println("Saving unsaved metrics to file...")
+		if err := repository.SaveMetricsToFile(storage, fileStoragePath); err != nil {
+			log.Printf("Warning: failed to save metrics: %v\n", err)
+		} else {
+			log.Println("Metrics saved successfully")
+		}
+
+		// Создаём контекст с таймаутом для graceful shutdown
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Закрываем сервер с graceful shutdown
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Error during server shutdown: %v\n", err)
+			return fmt.Errorf("server shutdown error: %w", err)
+		}
+
+		log.Println("Server shutdown complete")
+	}
+
+	return nil
 }
