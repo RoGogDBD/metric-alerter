@@ -7,7 +7,7 @@ import (
 
 	"github.com/RoGogDBD/metric-alerter/internal/handler"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
 )
 
 // TestHandler_ServeHTTP тестирует обработку различных HTTP-запросов к серверу метрик.

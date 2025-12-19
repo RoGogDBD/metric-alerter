@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"crypto/rsa"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -220,7 +221,7 @@ func run() error {
 	// Ожидание либо сигнала завершения, либо ошибки сервера.
 	select {
 	case err := <-errChan:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server error: %w", err)
 		}
 	case sig := <-sigChan:

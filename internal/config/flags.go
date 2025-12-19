@@ -20,7 +20,7 @@ type NetAddress struct {
 }
 
 // String возвращает строковое представление сетевого адреса в формате host:port.
-func (a NetAddress) String() string {
+func (a *NetAddress) String() string {
 	return a.Host + ":" + strconv.Itoa(a.Port)
 }
 

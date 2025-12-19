@@ -13,7 +13,7 @@ import (
 	"github.com/RoGogDBD/metric-alerter/internal/handler"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
 )
 
 // ExampleHandler_HandleUpdate демонстрирует использование эндпоинта обновления метрики через URL.

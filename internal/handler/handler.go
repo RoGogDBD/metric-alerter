@@ -20,7 +20,7 @@ import (
 	"github.com/RoGogDBD/metric-alerter/internal/crypto"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -422,7 +422,6 @@ func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Если данные зашифрованы, дешифруем их
 	if r.Header.Get("X-Encrypted") == "true" && h.cryptoKey != nil {
 		decrypted, err := crypto.DecryptData(body, h.cryptoKey)
 		if err != nil {
