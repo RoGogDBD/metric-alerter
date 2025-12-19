@@ -1,0 +1,9 @@
+{
+  "address": "localhost:8080",
+  "report_interval": "10s",
+  "poll_interval": "2s",
+  "rate_limit": 5,
+  "crypto_key": "",
+  "key": ""
+}
+

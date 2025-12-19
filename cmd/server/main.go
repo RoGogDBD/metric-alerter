@@ -18,7 +18,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/RoGogDBD/metric-alerter/internal/config/db"
@@ -50,25 +53,62 @@ func run() error {
 	defer logger.Sync()
 
 	// Определение флагов командной строки
-	dsnFlag := flag.String("d", "", "PostgreSQL DSN")
-	storeIntervalFlag := flag.Int("i", 300, "Store interval in seconds")
-	fileStorageFlag := flag.String("f", "metrics.json", "File storage path")
-	restoreFlag := flag.Bool("r", true, "Restore metrics from file at startup")
-	keyFlag := flag.String("k", "", "Key for request signing verification")
-	cryptoKeyFlag := flag.String("crypto-key", "", "Path to private key for asymmetric decryption")
-	auditFileFlag := flag.String("audit-file", "", "Path to audit log file")
-	auditURLFlag := flag.String("audit-url", "", "URL for remote audit server")
+	configFileFlag := flag.String(config.FlagConfig, "", "Path to JSON config file")
+	dsnFlag := flag.String(config.FlagDatabaseDSN, "", "PostgreSQL DSN")
+	storeIntervalFlag := flag.Int(config.FlagStoreInterval, 300, "Store interval in seconds")
+	fileStorageFlag := flag.String(config.FlagStoreFile, "metrics.json", "File storage path")
+	restoreFlag := flag.Bool(config.FlagRestore, true, "Restore metrics from file at startup")
+	keyFlag := flag.String(config.FlagKey, "", "Key for request signing verification")
+	cryptoKeyFlag := flag.String(config.FlagCryptoKey, "", "Path to private key for asymmetric decryption")
+	auditFileFlag := flag.String(config.FlagAuditFile, "", "Path to audit log file")
+	auditURLFlag := flag.String(config.FlagAuditURL, "", "URL for remote audit server")
 	addr := config.ParseAddressFlag()
 	flag.Parse()
 
-	// Получение значений из переменных окружения или флагов
-	dsn := repository.GetEnvOrFlagString("DATABASE_DSN", *dsnFlag)
-	key := repository.GetEnvOrFlagString("KEY", *keyFlag)
-	cryptoKeyPath := repository.GetEnvOrFlagString("CRYPTO_KEY", *cryptoKeyFlag)
-	auditFile := repository.GetEnvOrFlagString("AUDIT_FILE", *auditFileFlag)
-	auditURL := repository.GetEnvOrFlagString("AUDIT_URL", *auditURLFlag)
+	// Конфигурация из JSON файла.
+	configFilePath := config.GetConfigFilePathWithFlag(*configFileFlag)
+	jsonConfig, err := config.LoadServerJSONConfig(configFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to load JSON config: %w", err)
+	}
 
-	// Загружаем приватный ключ если указан
+	// ADDRESS.
+	if configFilePath != "" && jsonConfig.Address != "" {
+		if err := addr.Set(jsonConfig.Address); err != nil {
+			return fmt.Errorf("invalid address in config: %w", err)
+		}
+	}
+
+	// DATABASE_DSN
+	dsn := repository.GetEnvOrFlagString(config.EnvDatabaseDSN, *dsnFlag)
+	if dsn == "" && jsonConfig.DatabaseDSN != "" {
+		dsn = jsonConfig.DatabaseDSN
+	}
+
+	// KEY
+	key := repository.GetEnvOrFlagString(config.EnvKey, *keyFlag)
+	if key == "" && jsonConfig.Key != "" {
+		key = jsonConfig.Key
+	}
+
+	// CRYPTO_KEY
+	cryptoKeyPath := repository.GetEnvOrFlagString(config.EnvCryptoKey, *cryptoKeyFlag)
+	if cryptoKeyPath == "" && jsonConfig.CryptoKey != "" {
+		cryptoKeyPath = jsonConfig.CryptoKey
+	}
+
+	// AUDIT_FILE
+	auditFile := repository.GetEnvOrFlagString(config.EnvAuditFile, *auditFileFlag)
+	if auditFile == "" && jsonConfig.AuditFile != "" {
+		auditFile = jsonConfig.AuditFile
+	}
+
+	// AUDIT_URL
+	auditURL := repository.GetEnvOrFlagString(config.EnvAuditURL, *auditURLFlag)
+	if auditURL == "" && jsonConfig.AuditURL != "" {
+		auditURL = jsonConfig.AuditURL
+	}
+
 	var privateKey *rsa.PrivateKey
 	if cryptoKeyPath != "" {
 		var err error
@@ -78,7 +118,6 @@ func run() error {
 		}
 	}
 
-	// Инициализация менеджера аудита и добавление наблюдателей
 	auditManager := repository.NewAuditManager()
 	if auditFile != "" {
 		if !filepath.IsAbs(auditFile) {
@@ -97,7 +136,7 @@ func run() error {
 		log.Printf("Audit HTTP observer enabled: %s", auditURL)
 	}
 
-	// Инициализация пула соединений с БД, если указан DSN
+	// Инициализация пула соединений с БД, если указан DSN.
 	var dbPool *pgxpool.Pool
 	if dsn != "" {
 		dbPool, err = db.InitDB(context.Background(), dsn)
@@ -109,56 +148,76 @@ func run() error {
 		log.Println("No DSN provided, database features disabled")
 	}
 
-	// Получение параметров хранения и восстановления метрик
-	storeInterval := repository.GetEnvOrFlagInt("STORE_INTERVAL", *storeIntervalFlag)
-	fileStoragePath := repository.GetEnvOrFlagString("FILE_STORAGE_PATH", *fileStorageFlag)
-	restore := repository.GetEnvOrFlagBool("RESTORE", *restoreFlag)
+	// Получение параметров хранения и восстановления метрик.
+	storeInterval := repository.GetEnvOrFlagInt(config.EnvStoreInterval, *storeIntervalFlag)
+	fileStoragePath := repository.GetEnvOrFlagString(config.EnvStoreFile, *fileStorageFlag)
+	restore := repository.GetEnvOrFlagBool(config.EnvRestore, *restoreFlag)
 
-	// Инициализация хранилища и обработчика HTTP-запросов
+	// Применяем значения из JSON конфига.
+	if configFilePath != "" {
+		// STORE_INTERVAL
+		if storeInterval == 300 && *storeIntervalFlag == 300 && config.EnvString(config.EnvStoreInterval) == "" && jsonConfig.StoreInterval != "" {
+			if val, err := config.ParseDuration(jsonConfig.StoreInterval); err == nil && val != 0 {
+				storeInterval = val
+			}
+		}
+
+		// STORE_FILE
+		if fileStoragePath == "metrics.json" && *fileStorageFlag == "metrics.json" && config.EnvString(config.EnvStoreFile) == "" && jsonConfig.StoreFile != "" {
+			fileStoragePath = jsonConfig.StoreFile
+		}
+
+		// RESTORE
+		if jsonConfig.Restore != nil {
+			restore = *jsonConfig.Restore
+		}
+	}
+
+	// Инициализация хранилища и обработчика HTTP-запросов.
 	storage := repository.NewMemStorage()
 	h := handler.NewHandler(storage, dbPool)
 	h.SetKey(key)
 	h.SetCryptoKey(privateKey)
 	h.SetAuditManager(auditManager)
 
-	// Восстановление метрик из файла при необходимости
+	// Восстановление метрик из файла при необходимости.
 	if restore {
 		if err := repository.LoadMetricsFromFile(storage, fileStoragePath); err != nil && !os.IsNotExist(err) {
 			log.Printf("Failed to restore metrics: %v", err)
 		}
 	}
 
-	// Создание маршрутизатора HTTP-запросов
+	// Создание маршрутизатора HTTP-запросов.
 	r := service.NewRouter(h, storage, storeInterval, fileStoragePath, logger)
 
-	// Применение адреса сервера из переменной окружения, если задано
-	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
+	// Применение адреса сервера из переменной окружения, если задано.
+	if err := config.EnvServer(addr, config.EnvAddress); err != nil {
 		return err
 	}
 
 	log.Printf("Using address: %s\n", addr.String())
 	fmt.Println("Server started")
 
-	// Создание HTTP сервера
+	// Создание HTTP сервера.
 	srv := &http.Server{
 		Addr:    addr.String(),
 		Handler: r,
 	}
 
-	// Канал для сигналов завершения
+	// Канал для сигналов завершения.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 
-	// Канал для ошибок сервера
+	// Канал для ошибок сервера.
 	errChan := make(chan error, 1)
 
-	// Запуск сервера в отдельной горутине
+	// Запуск сервера в отдельной горутине.
 	go func() {
 		log.Printf("Server listening on %s\n", srv.Addr)
 		errChan <- srv.ListenAndServe()
 	}()
 
-	// Ожидание либо сигнала завершения, либо ошибки сервера
+	// Ожидание либо сигнала завершения, либо ошибки сервера.
 	select {
 	case err := <-errChan:
 		if err != nil && err != http.ErrServerClosed {
@@ -175,11 +234,11 @@ func run() error {
 			log.Println("Metrics saved successfully")
 		}
 
-		// Создаём контекст с таймаутом для graceful shutdown
+		// Создаём контекст с таймаутом для graceful shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// Закрываем сервер с graceful shutdown
+		// Закрываем сервер с graceful shutdown.
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Printf("Error during server shutdown: %v\n", err)
 			return fmt.Errorf("server shutdown error: %w", err)

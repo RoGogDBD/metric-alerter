@@ -48,6 +48,6 @@ func (a *NetAddress) Set(s string) error {
 // Возвращает указатель на NetAddress с дефолтными значениями (localhost:8080).
 func ParseAddressFlag() *NetAddress {
 	addr := &NetAddress{Host: "localhost", Port: 8080}
-	flag.Var(addr, "a", "Net address host:port")
+	flag.Var(addr, FlagAddress, "Net address host:port")
 	return addr
 }

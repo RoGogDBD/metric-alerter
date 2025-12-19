@@ -328,32 +328,75 @@ func computeHMACSHA256(data []byte, key string) string {
 // Возвращает указатель на сетевой адрес и состояние агента.
 func parseFlags() (*config.NetAddress, *AgentState) {
 	addr := config.ParseAddressFlag()
-	poll := flag.Int("p", 2, "Poll interval in seconds")
-	report := flag.Int("r", 10, "Report interval in seconds")
-	key := flag.String("k", "", "Key for signing requests")
-	limit := flag.Int("l", 1, "Rate limit (max concurrent outgoing requests)")
-	cryptoKey := flag.String("crypto-key", "", "Path to public key for asymmetric encryption")
+	configFileFlag := flag.String(config.FlagConfig, "", "Path to JSON config file")
+	poll := flag.Int(config.FlagPollInterval, 2, "Poll interval in seconds")
+	report := flag.Int(config.FlagReportInterval, 10, "Report interval in seconds")
+	key := flag.String(config.FlagKey, "", "Key for signing requests")
+	limit := flag.Int(config.FlagRateLimit, 1, "Rate limit (max concurrent outgoing requests)")
+	cryptoKey := flag.String(config.FlagCryptoKey, "", "Path to public key for asymmetric encryption")
 
 	flag.Parse()
 
-	if val, err := config.EnvInt("POLL_INTERVAL"); err == nil && val != 0 {
-		*poll = val
-	}
-	if val, err := config.EnvInt("REPORT_INTERVAL"); err == nil && val != 0 {
-		*report = val
-	}
-	if val, err := config.EnvInt("RATE_LIMIT"); err == nil && val != 0 {
-		*limit = val
+	// Загружаем конфигурацию из JSON файла (если указан).
+	configFilePath := config.GetConfigFilePathWithFlag(*configFileFlag)
+	jsonConfig, err := config.LoadAgentJSONConfig(configFilePath)
+	if err != nil {
+		log.Fatalf("failed to load JSON config: %w", err)
 	}
 
-	keyValue := config.EnvString("KEY")
+	// POLL_INTERVAL.
+	pollVal := *poll
+	if envVal, err := config.EnvInt(config.EnvPollInterval); err == nil && envVal != 0 {
+		pollVal = envVal
+	}
+	if pollVal == 2 && *poll == 2 && config.EnvString(config.EnvPollInterval) == "" && jsonConfig.PollInterval != "" {
+		if val, err := config.ParseDuration(jsonConfig.PollInterval); err == nil && val != 0 {
+			pollVal = val
+		}
+	}
+
+	// REPORT_INTERVAL.
+	reportVal := *report
+	if envVal, err := config.EnvInt(config.EnvReportInterval); err == nil && envVal != 0 {
+		reportVal = envVal
+	}
+	if reportVal == 10 && *report == 10 && config.EnvString(config.EnvReportInterval) == "" && jsonConfig.ReportInterval != "" {
+		if val, err := config.ParseDuration(jsonConfig.ReportInterval); err == nil && val != 0 {
+			reportVal = val
+		}
+	}
+
+	// RATE_LIMIT.
+	limitVal := *limit
+	if envVal, err := config.EnvInt(config.EnvRateLimit); err == nil && envVal != 0 {
+		limitVal = envVal
+	}
+	if limitVal == 1 && *limit == 1 && config.EnvString(config.EnvRateLimit) == "" && jsonConfig.RateLimit != nil {
+		limitVal = *jsonConfig.RateLimit
+	}
+
+	// KEY.
+	keyValue := config.EnvString(config.EnvKey)
 	if keyValue == "" {
 		keyValue = *key
 	}
+	if keyValue == "" && jsonConfig.Key != "" {
+		keyValue = jsonConfig.Key
+	}
 
-	cryptoKeyPath := config.EnvString("CRYPTO_KEY")
+	// CRYPTO_KEY.
+	cryptoKeyPath := config.EnvString(config.EnvCryptoKey)
 	if cryptoKeyPath == "" {
 		cryptoKeyPath = *cryptoKey
+	}
+	if cryptoKeyPath == "" && jsonConfig.CryptoKey != "" {
+		cryptoKeyPath = jsonConfig.CryptoKey
+	}
+
+	if configFilePath != "" && jsonConfig.Address != "" {
+		if err := addr.Set(jsonConfig.Address); err != nil {
+			log.Fatalf("invalid address in config: %v", err)
+		}
 	}
 
 	var publicKey *rsa.PublicKey
@@ -366,9 +409,9 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 	}
 
 	cfg := Config{
-		PollInterval:   *poll,
-		ReportInterval: *report,
-		RateLimit:      *limit,
+		PollInterval:   pollVal,
+		ReportInterval: reportVal,
+		RateLimit:      limitVal,
 		Key:            keyValue,
 		CryptoKey:      publicKey,
 	}
@@ -393,7 +436,7 @@ func main() {
 
 	addr, state := parseFlags()
 
-	if err := config.EnvServer(addr, "ADDRESS"); err != nil {
+	if err := config.EnvServer(addr, config.EnvAddress); err != nil {
 		log.Fatalf("failed to apply env override: %v", err)
 	}
 
