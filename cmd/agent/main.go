@@ -341,7 +341,7 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 	configFilePath := config.GetConfigFilePathWithFlag(*configFileFlag)
 	jsonConfig, err := config.LoadAgentJSONConfig(configFilePath)
 	if err != nil {
-		log.Fatalf("failed to load JSON config: %w", err)
+		log.Fatalf("failed to load JSON config: %v", err)
 	}
 
 	// POLL_INTERVAL.
