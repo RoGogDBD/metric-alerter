@@ -260,6 +260,11 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	compressed := make([]byte, buf.Len())
 	copy(compressed, buf.Bytes())
 
+	var hashSignature string
+	if rs.Key != "" {
+		hashSignature = computeHMACSHA256(compressed, rs.Key)
+	}
+
 	// Шифруем сжатые данные, если задан публичный ключ.
 	dataToSend := compressed
 	if rs.CryptoKey != nil {
@@ -288,9 +293,8 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 			req.SetHeader("X-Encrypted", "true")
 		}
 
-		if rs.Key != "" {
-			hash := computeHMACSHA256(dataToSend, rs.Key)
-			req.SetHeader("HashSHA256", hash)
+		if hashSignature != "" {
+			req.SetHeader("HashSHA256", hashSignature)
 		}
 
 		resp, err := req.Post("/updates/")

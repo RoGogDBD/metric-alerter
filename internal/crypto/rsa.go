@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -66,7 +67,7 @@ func LoadPrivateKey(filePath string) (*rsa.PrivateKey, error) {
 // publicKey — публичный RSA ключ.
 // Возвращает зашифрованные данные или ошибку.
 func EncryptData(data []byte, publicKey *rsa.PublicKey) ([]byte, error) {
-	encryptedData, err := rsa.EncryptPKCS1v15(rand.Reader, publicKey, data)
+	encryptedData, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, data, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt data: %w", err)
 	}
@@ -79,7 +80,7 @@ func EncryptData(data []byte, publicKey *rsa.PublicKey) ([]byte, error) {
 // privateKey — приватный RSA ключ.
 // Возвращает расшифрованные данные или ошибку.
 func DecryptData(encryptedData []byte, privateKey *rsa.PrivateKey) ([]byte, error) {
-	decryptedData, err := rsa.DecryptPKCS1v15(rand.Reader, privateKey, encryptedData)
+	decryptedData, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedData, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt data: %w", err)
 	}
