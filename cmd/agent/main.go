@@ -465,11 +465,11 @@ func main() {
 
 	startWorkerPool(state)
 
-	// Канал для сигналов завершения
+	// Канал для сигналов завершения.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 
-	// Запуск pprof-сервера для профилирования
+	// Запуск pprof-сервера для профилирования.
 	go func() {
 		log.Println("pprof http server listening on :6060")
 		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
@@ -477,7 +477,7 @@ func main() {
 		}
 	}()
 
-	// Периодический сбор метрик runtime
+	// Периодический сбор метрик runtime.
 	pollCtx, pollCancel := context.WithCancel(context.Background())
 	go func(pollSec int) {
 		t := time.NewTicker(time.Duration(pollSec) * time.Second)
@@ -492,7 +492,7 @@ func main() {
 		}
 	}(state.Config.PollInterval)
 
-	// Периодический сбор системных метрик
+	// Периодический сбор системных метрик.
 	sysCtx, sysCancel := context.WithCancel(context.Background())
 	go func(pollSec int) {
 		t := time.NewTicker(time.Duration(pollSec) * time.Second)
@@ -507,7 +507,7 @@ func main() {
 		}
 	}(state.Config.PollInterval)
 
-	// Периодическая отправка метрик с поддержкой graceful shutdown
+	// Периодическая отправка метрик с поддержкой graceful shutdown.
 	reportTicker := time.NewTicker(time.Duration(state.Config.ReportInterval) * time.Second)
 	defer reportTicker.Stop()
 
@@ -525,21 +525,21 @@ func main() {
 		case sig := <-sigChan:
 			log.Printf("Received signal: %v. Starting graceful shutdown...\n", sig)
 
-			// Отправляем последний батч метрик
+			// Отправляем последний батч метрик.
 			finalBatch := buildBatchSnapshot(state)
 			if len(finalBatch) > 0 {
 				log.Printf("Sending final batch of %d metrics...\n", len(finalBatch))
 				state.jobQueue <- finalBatch
 			}
 
-			// Останавливаем горутины сбора метрик
+			// Останавливаем горутины сбора метрик.
 			pollCancel()
 			sysCancel()
 
-			// Закрываем очередь заданий
+			// Закрываем очередь заданий.
 			close(state.jobQueue)
 
-			// Ждем завершения всех воркеров
+			// Ждем завершения всех воркеров.
 			log.Println("Waiting for pending requests to complete...")
 			state.wg.Wait()
 
