@@ -84,6 +84,7 @@ type AgentState struct {
 	Collector *MetricsCollector
 	Sender    MetricsSender
 	jobQueue  chan []models.Metrics
+	wg        sync.WaitGroup
 }
 
 // collectMetrics собирает метрики из runtime и обновляет их в коллекторе.
@@ -208,7 +209,9 @@ func startWorkerPool(state *AgentState) {
 	state.jobQueue = make(chan []models.Metrics)
 
 	for i := 0; i < state.Config.RateLimit; i++ {
+		state.wg.Add(1)
 		go func(id int) {
+			defer state.wg.Done()
 			for batch := range state.jobQueue {
 				if err := state.Sender.SendBatch(batch); err != nil {
 					log.Printf("worker %d: send error: %v", id, err)
@@ -527,8 +530,6 @@ func main() {
 			if len(finalBatch) > 0 {
 				log.Printf("Sending final batch of %d metrics...\n", len(finalBatch))
 				state.jobQueue <- finalBatch
-				// Даём время на отправку
-				time.Sleep(2 * time.Second)
 			}
 
 			// Останавливаем горутины сбора метрик
@@ -538,9 +539,9 @@ func main() {
 			// Закрываем очередь заданий
 			close(state.jobQueue)
 
-			// Даём время на обработку оставшихся заданий в очереди
+			// Ждем завершения всех воркеров
 			log.Println("Waiting for pending requests to complete...")
-			time.Sleep(3 * time.Second)
+			state.wg.Wait()
 
 			log.Println("Agent shutdown complete")
 			return
