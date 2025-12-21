@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,9 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RoGogDBD/metric-alerter/internal/crypto"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -29,6 +31,7 @@ type Handler struct {
 	storage      repository.Storage  // Хранилище метрик
 	db           *pgxpool.Pool       // Подключение к базе данных
 	key          string              // Ключ для HMAC-подписи
+	cryptoKey    *rsa.PrivateKey     // Приватный ключ для дешифрования
 	auditManager models.AuditSubject // Менеджер аудита
 }
 
@@ -46,6 +49,14 @@ func NewHandler(storage repository.Storage, db *pgxpool.Pool) *Handler {
 // Если ключ пустой, подпись не вычисляется и не проверяется.
 func (h *Handler) SetKey(key string) {
 	h.key = key
+}
+
+// SetCryptoKey устанавливает приватный ключ для дешифрования асимметричным шифрованием.
+//
+// key — приватный RSA ключ для дешифрования данных.
+// Если ключ nil, дешифрование не выполняется.
+func (h *Handler) SetCryptoKey(key *rsa.PrivateKey) {
+	h.cryptoKey = key
 }
 
 // SetAuditManager устанавливает менеджер аудита для отправки событий.
@@ -385,6 +396,7 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 // HandlerUpdateBatchJSON обрабатывает POST-запрос для пакетного обновления метрик в формате JSON.
 //
 // Проверяет подпись HMAC, валидирует и сохраняет каждую метрику, синхронизирует с БД (если настроено), отправляет событие аудита.
+// Поддерживает асимметричное дешифрование данных с использованием приватного ключа.
 //
 // @Summary Пакетное обновление метрик
 // @Description Обновляет несколько метрик за один запрос, переданных в теле запроса в формате JSON
@@ -393,6 +405,7 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param metrics body []models.Metrics true "Массив метрик для обновления"
 // @Param HashSHA256 header string false "HMAC-SHA256 подпись тела запроса"
+// @Param X-Encrypted header string false "Флаг, указывающий на зашифрованные данные"
 // @Success 200 {array} models.Metrics "Массив обновлённых метрик"
 // @Failure 400 {string} string "Некорректный JSON или неверная подпись"
 // @Failure 500 {string} string "Ошибка сохранения метрик"
@@ -408,6 +421,16 @@ func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
 	}
+
+	if r.Header.Get("X-Encrypted") == "true" && h.cryptoKey != nil {
+		decrypted, err := crypto.DecryptData(body, h.cryptoKey)
+		if err != nil {
+			http.Error(w, "failed to decrypt data", http.StatusBadRequest)
+			return
+		}
+		body = decrypted
+	}
+
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
 	receivedHash := r.Header.Get("HashSHA256")

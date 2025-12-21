@@ -82,13 +82,11 @@ func TestPool_Reuse(t *testing.T) {
 	obj1.Value = 100
 	p.Put(obj1)
 
-
 	obj2 := p.Get()
 
 	if obj2 != ptr1 {
 		t.Log("Note: Got different object (pool behavior is not deterministic)")
 	}
-
 
 	if obj2.Value != 0 {
 		t.Errorf("Expected Value=0 in reused object, got %d", obj2.Value)
@@ -105,7 +103,6 @@ func TestPool_Concurrent(t *testing.T) {
 	const goroutines = 100
 	done := make(chan bool, goroutines)
 
-
 	for i := 0; i < goroutines; i++ {
 		go func(id int) {
 			obj := p.Get()
@@ -117,11 +114,9 @@ func TestPool_Concurrent(t *testing.T) {
 		}(i)
 	}
 
-
 	for i := 0; i < goroutines; i++ {
 		<-done
 	}
-
 
 	obj := p.Get()
 	if obj.Value != 0 {
@@ -152,7 +147,7 @@ func BenchmarkWithoutPool(b *testing.B) {
 		obj := &TestStruct{
 			Items: make([]int, 0, 100),
 		}
-		obj.Value = i
+		_ = i
 		obj.Items = append(obj.Items, 1, 2, 3, 4, 5)
 	}
 }

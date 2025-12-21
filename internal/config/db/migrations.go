@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -26,7 +27,7 @@ func RunMigrations(dsn string) error {
 	log.Println("Migration files found. Applying migrations...")
 
 	if err := m.Up(); err != nil {
-		if err == migrate.ErrNoChange {
+		if errors.Is(err, migrate.ErrNoChange) {
 			log.Println("No migrations to apply. Database is up-to-date.")
 		} else {
 			return fmt.Errorf("failed to run migrations: %v", err)
