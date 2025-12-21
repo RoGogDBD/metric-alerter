@@ -49,43 +49,52 @@ var (
 	}
 )
 
-// Metric — структура для хранения метрики (тип и значение).
-type Metric struct {
-	Type  string  // Тип метрики: "gauge" или "counter"
-	Value float64 // Значение метрики
-}
+type (
+	// Metric — структура для хранения метрики (тип и значение).
+	Metric struct {
+		Type  string  // Тип метрики: "gauge" или "counter"
+		Value float64 // Значение метрики
+	}
 
-// MetricsSender — интерфейс для отправки батча метрик.
-type MetricsSender interface {
-	// SendBatch отправляет срез метрик на сервер.
-	SendBatch(metrics []models.Metrics) error
-}
+	// MetricsSender — интерфейс для отправки батча метрик.
+	MetricsSender interface {
+		// SendBatch отправляет срез метрик на сервер.
+		SendBatch(metrics []models.Metrics) error
+	}
 
-// Config — конфигурация агента.
-type Config struct {
-	PollInterval   int            // Интервал опроса метрик (сек).
-	ReportInterval int            // Интервал отправки метрик (сек).
-	RateLimit      int            // Ограничение на количество параллельных отправок.
-	Key            string         // Ключ для подписи запросов.
-	CryptoKey      *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
-}
+	// Config — конфигурация агента.
+	Config struct {
+		PollInterval   int            // Интервал опроса метрик (сек).
+		ReportInterval int            // Интервал отправки метрик (сек).
+		RateLimit      int            // Ограничение на количество параллельных отправок.
+		Key            string         // Ключ для подписи запросов.
+		CryptoKey      *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
+	}
 
-// MetricsCollector — сборщик метрик, хранит значения и счетчик опросов.
-type MetricsCollector struct {
-	metrics   map[string]Metric // Собранные метрики.
-	pollCount int64             // Счетчик опросов.
-	rng       *rand.Rand        // Генератор случайных чисел.
-	mu        sync.RWMutex      // Мьютекс для конкурентного доступа.
-}
+	// MetricsCollector — сборщик метрик, хранит значения и счетчик опросов.
+	MetricsCollector struct {
+		metrics   map[string]Metric // Собранные метрики.
+		pollCount int64             // Счетчик опросов.
+		rng       *rand.Rand        // Генератор случайных чисел.
+		mu        sync.RWMutex      // Мьютекс для конкурентного доступа.
+	}
 
-// AgentState — состояние агента, включает конфиг, сборщик, отправителя и очередь заданий.
-type AgentState struct {
-	Config    Config
-	Collector *MetricsCollector
-	Sender    MetricsSender
-	jobQueue  chan []models.Metrics
-	wg        sync.WaitGroup
-}
+	// AgentState — состояние агента, включает конфиг, сборщик, отправителя и очередь заданий.
+	AgentState struct {
+		Config    Config                // Конфигурация агента.
+		Collector *MetricsCollector     // Сборщик метрик.
+		Sender    MetricsSender         // Отправитель метрик.
+		jobQueue  chan []models.Metrics // Очередь заданий для отправки метрик.
+		wg        sync.WaitGroup        // Группа ожидания для воркеров.
+	}
+
+	// RestySender реализует MetricsSender, отправляя метрики через resty.Client.
+	RestySender struct {
+		Client    *resty.Client  // HTTP-клиент.
+		Key       string         // Ключ для подписи.
+		CryptoKey *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
+	}
+)
 
 // collectMetrics собирает метрики из runtime и обновляет их в коллекторе.
 //
@@ -221,13 +230,6 @@ func startWorkerPool(state *AgentState) {
 	}
 }
 
-// RestySender реализует MetricsSender, отправляя метрики через resty.Client.
-type RestySender struct {
-	Client    *resty.Client  // HTTP-клиент.
-	Key       string         // Ключ для подписи.
-	CryptoKey *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
-}
-
 // SendBatch сжимает, подписывает, шифрует и отправляет батч метрик на сервер.
 //
 // metrics — срез метрик для отправки.
@@ -344,94 +346,55 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 
 	flag.Parse()
 
-	// Загружаем конфигурацию из JSON файла (если указан).
+	if envPoll, err := config.EnvInt(config.EnvPollInterval); err == nil && envPoll != 0 {
+		*poll = envPoll
+	}
+	if envReport, err := config.EnvInt(config.EnvReportInterval); err == nil && envReport != 0 {
+		*report = envReport
+	}
+	if envLimit, err := config.EnvInt(config.EnvRateLimit); err == nil && envLimit != 0 {
+		*limit = envLimit
+	}
+
+	if envKey := config.EnvString(config.EnvKey); envKey != "" {
+		*key = envKey
+	}
+	if envCrypto := config.EnvString(config.EnvCryptoKey); envCrypto != "" {
+		*cryptoKey = envCrypto
+	}
+
 	configFilePath := config.GetConfigFilePathWithFlag(*configFileFlag)
-	jsonConfig, err := config.LoadAgentJSONConfig(configFilePath)
-	if err != nil {
-		log.Fatalf("failed to load JSON config: %v", err)
-	}
-
-	// POLL_INTERVAL.
-	pollVal := *poll
-	if envVal, err := config.EnvInt(config.EnvPollInterval); err == nil && envVal != 0 {
-		pollVal = envVal
-	}
-	if pollVal == 2 && *poll == 2 && config.EnvString(config.EnvPollInterval) == "" && jsonConfig.PollInterval != "" {
-		if val, err := config.ParseDuration(jsonConfig.PollInterval); err == nil && val != 0 {
-			pollVal = val
-		}
-	}
-
-	// REPORT_INTERVAL.
-	reportVal := *report
-	if envVal, err := config.EnvInt(config.EnvReportInterval); err == nil && envVal != 0 {
-		reportVal = envVal
-	}
-	if reportVal == 10 && *report == 10 && config.EnvString(config.EnvReportInterval) == "" && jsonConfig.ReportInterval != "" {
-		if val, err := config.ParseDuration(jsonConfig.ReportInterval); err == nil && val != 0 {
-			reportVal = val
-		}
-	}
-
-	// RATE_LIMIT.
-	limitVal := *limit
-	if envVal, err := config.EnvInt(config.EnvRateLimit); err == nil && envVal != 0 {
-		limitVal = envVal
-	}
-	if limitVal == 1 && *limit == 1 && config.EnvString(config.EnvRateLimit) == "" && jsonConfig.RateLimit != nil {
-		limitVal = *jsonConfig.RateLimit
-	}
-
-	// KEY.
-	keyValue := config.EnvString(config.EnvKey)
-	if keyValue == "" {
-		keyValue = *key
-	}
-	if keyValue == "" && jsonConfig.Key != "" {
-		keyValue = jsonConfig.Key
-	}
-
-	// CRYPTO_KEY.
-	cryptoKeyPath := config.EnvString(config.EnvCryptoKey)
-	if cryptoKeyPath == "" {
-		cryptoKeyPath = *cryptoKey
-	}
-	if cryptoKeyPath == "" && jsonConfig.CryptoKey != "" {
-		cryptoKeyPath = jsonConfig.CryptoKey
-	}
-
-	if configFilePath != "" && jsonConfig.Address != "" {
-		if err := addr.Set(jsonConfig.Address); err != nil {
-			log.Fatalf("invalid address in config: %v", err)
+	if configFilePath != "" {
+		jsonConfig, err := config.LoadAgentJSONConfig(configFilePath)
+		if err != nil {
+			log.Printf("Warning: failed to load JSON config: %v", err)
+		} else if jsonConfig != nil {
+			jsonConfig.ApplyToAgent(poll, report, limit, key, cryptoKey, addr)
 		}
 	}
 
 	var publicKey *rsa.PublicKey
-	if cryptoKeyPath != "" {
+	if *cryptoKey != "" {
 		var err error
-		publicKey, err = crypto.LoadPublicKey(cryptoKeyPath)
+		publicKey, err = crypto.LoadPublicKey(*cryptoKey)
 		if err != nil {
 			log.Fatalf("failed to load public key: %v", err)
 		}
 	}
 
-	cfg := Config{
-		PollInterval:   pollVal,
-		ReportInterval: reportVal,
-		RateLimit:      limitVal,
-		Key:            keyValue,
-		CryptoKey:      publicKey,
-	}
-
-	collector := &MetricsCollector{
-		metrics:   make(map[string]Metric),
-		pollCount: 0,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
-
 	state := &AgentState{
-		Config:    cfg,
-		Collector: collector,
+		Config: Config{
+			PollInterval:   *poll,
+			ReportInterval: *report,
+			RateLimit:      *limit,
+			Key:            *key,
+			CryptoKey:      publicKey,
+		},
+		Collector: &MetricsCollector{
+			metrics:   make(map[string]Metric),
+			pollCount: 0,
+			rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		},
 	}
 
 	return addr, state
