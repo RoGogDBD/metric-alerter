@@ -112,7 +112,7 @@ func (jc *AgentJSONConfig) ApplyToAgent(
 	}
 }
 
-// ApplyToAgent применяет настройки из AgentJSONConfig к переданным параметрам.
+// ApplyToServer применяет настройки из ServerJSONConfig к переданным параметрам,
 func (jc *ServerJSONConfig) ApplyToServer(
 	addr *NetAddress,
 	dsn *string,
