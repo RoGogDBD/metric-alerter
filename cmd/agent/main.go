@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -93,6 +94,7 @@ type (
 		Client    *resty.Client  // HTTP-клиент.
 		Key       string         // Ключ для подписи.
 		CryptoKey *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
+		RealIP    string         // IP хоста агента.
 	}
 )
 
@@ -294,6 +296,10 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 			SetHeader("Content-Encoding", "gzip").
 			SetBody(dataToSend)
 
+		if rs.RealIP != "" {
+			req.SetHeader("X-Real-IP", rs.RealIP)
+		}
+
 		if rs.CryptoKey != nil {
 			req.SetHeader("X-Encrypted", "true")
 		}
@@ -319,6 +325,34 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	bufPool.Put(buf)
 
 	return err
+}
+
+// resolveHostIP пытается определить IP-адрес хоста агента.
+func resolveHostIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		ip = ip.To4()
+		if ip == nil {
+			continue
+		}
+		return ip.String()
+	}
+
+	return "127.0.0.1"
 }
 
 // computeHMACSHA256 вычисляет HMAC-SHA256 для данных с заданным ключом.
@@ -424,6 +458,7 @@ func main() {
 		Client:    restyClient,
 		Key:       state.Config.Key,
 		CryptoKey: state.Config.CryptoKey,
+		RealIP:    resolveHostIP(),
 	}
 
 	startWorkerPool(state)

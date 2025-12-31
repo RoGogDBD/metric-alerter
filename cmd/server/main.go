@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -62,6 +63,7 @@ func run() error {
 	cryptoKeyFlag := flag.String(config.FlagCryptoKey, "", "Path to private key for asymmetric decryption")
 	auditFileFlag := flag.String(config.FlagAuditFile, "", "Path to audit log file")
 	auditURLFlag := flag.String(config.FlagAuditURL, "", "URL for remote audit server")
+	trustedSubnetFlag := flag.String(config.FlagTrustedSubnet, "", "Trusted subnet in CIDR format")
 	addr := config.ParseAddressFlag()
 	flag.Parse()
 
@@ -74,6 +76,7 @@ func run() error {
 	cryptoKeyPath := repository.GetEnvOrFlagString(config.EnvCryptoKey, *cryptoKeyFlag)
 	auditFile := repository.GetEnvOrFlagString(config.EnvAuditFile, *auditFileFlag)
 	auditURL := repository.GetEnvOrFlagString(config.EnvAuditURL, *auditURLFlag)
+	trustedSubnet := repository.GetEnvOrFlagString(config.EnvTrustedSubnet, *trustedSubnetFlag)
 
 	// Загрузка JSON конфигурации и применение к параметрам (низший приоритет).
 	configFilePath := config.GetConfigFilePathWithFlag(*configFileFlag)
@@ -85,7 +88,7 @@ func run() error {
 			// Вызов нового метода, который заменяет ручные проверки.
 			jsonConfig.ApplyToServer(
 				addr, &dsn, &storeInterval, &fileStoragePath,
-				&restore, &key, &cryptoKeyPath, &auditFile, &auditURL,
+				&restore, &key, &cryptoKeyPath, &auditFile, &auditURL, &trustedSubnet,
 			)
 		}
 	}
@@ -132,6 +135,13 @@ func run() error {
 	h.SetKey(key)
 	h.SetCryptoKey(privateKey)
 	h.SetAuditManager(auditManager)
+	if trustedSubnet != "" {
+		_, subnet, err := net.ParseCIDR(trustedSubnet)
+		if err != nil {
+			return fmt.Errorf("invalid trusted subnet: %w", err)
+		}
+		h.SetTrustedSubnet(subnet)
+	}
 
 	if restore {
 		if err := repository.LoadMetricsFromFile(storage, fileStoragePath); err != nil && !os.IsNotExist(err) {

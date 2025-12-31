@@ -18,6 +18,7 @@ const (
 	EnvAuditFile      = "AUDIT_FILE"
 	EnvAuditURL       = "AUDIT_URL"
 	EnvKey            = "KEY"
+	EnvTrustedSubnet  = "TRUSTED_SUBNET"
 	EnvPollInterval   = "POLL_INTERVAL"
 	EnvReportInterval = "REPORT_INTERVAL"
 	EnvRateLimit      = "RATE_LIMIT"
@@ -35,6 +36,7 @@ const (
 	FlagAuditFile      = "audit-file"
 	FlagAuditURL       = "audit-url"
 	FlagKey            = "k"
+	FlagTrustedSubnet  = "t"
 	FlagPollInterval   = "p"
 	FlagReportInterval = "r"
 	FlagRateLimit      = "l"
@@ -53,6 +55,7 @@ type (
 		AuditFile     string `json:"audit_file"`     // AUDIT_FILE или флаг -audit-file
 		AuditURL      string `json:"audit_url"`      // AUDIT_URL или флаг -audit-url
 		Key           string `json:"key"`            // KEY или флаг -k
+		TrustedSubnet string `json:"trusted_subnet"` // TRUSTED_SUBNET или флаг -t
 	}
 
 	// AgentJSONConfig представляет конфигурацию агента в формате JSON.
@@ -123,6 +126,7 @@ func (jc *ServerJSONConfig) ApplyToServer(
 	crypto *string,
 	auditFile *string,
 	auditURL *string,
+	trustedSubnet *string,
 ) {
 	if jc == nil {
 		return
@@ -156,6 +160,9 @@ func (jc *ServerJSONConfig) ApplyToServer(
 	}
 	if *auditURL == "" && jc.AuditURL != "" {
 		*auditURL = jc.AuditURL
+	}
+	if *trustedSubnet == "" && jc.TrustedSubnet != "" {
+		*trustedSubnet = jc.TrustedSubnet
 	}
 }
 
