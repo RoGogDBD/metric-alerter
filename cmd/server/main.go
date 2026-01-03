@@ -33,6 +33,7 @@ import (
 	"github.com/RoGogDBD/metric-alerter/internal/service"
 	"github.com/RoGogDBD/metric-alerter/internal/version"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/grpc"
 )
 
 // main — точка входа в приложение сервера метрик.
@@ -64,6 +65,7 @@ func run() error {
 	auditFileFlag := flag.String(config.FlagAuditFile, "", "Path to audit log file")
 	auditURLFlag := flag.String(config.FlagAuditURL, "", "URL for remote audit server")
 	trustedSubnetFlag := flag.String(config.FlagTrustedSubnet, "", "Trusted subnet in CIDR format")
+	grpcAddressFlag := flag.String(config.FlagGRPCAddress, "", "gRPC server address")
 	addr := config.ParseAddressFlag()
 	flag.Parse()
 
@@ -77,6 +79,7 @@ func run() error {
 	auditFile := repository.GetEnvOrFlagString(config.EnvAuditFile, *auditFileFlag)
 	auditURL := repository.GetEnvOrFlagString(config.EnvAuditURL, *auditURLFlag)
 	trustedSubnet := repository.GetEnvOrFlagString(config.EnvTrustedSubnet, *trustedSubnetFlag)
+	grpcAddress := repository.GetEnvOrFlagString(config.EnvGRPCAddress, *grpcAddressFlag)
 
 	// Загрузка JSON конфигурации и применение к параметрам (низший приоритет).
 	configFilePath := config.GetConfigFilePathWithFlag(*configFileFlag)
@@ -88,7 +91,7 @@ func run() error {
 			// Вызов нового метода, который заменяет ручные проверки.
 			jsonConfig.ApplyToServer(
 				addr, &dsn, &storeInterval, &fileStoragePath,
-				&restore, &key, &cryptoKeyPath, &auditFile, &auditURL, &trustedSubnet,
+				&restore, &key, &cryptoKeyPath, &auditFile, &auditURL, &trustedSubnet, &grpcAddress,
 			)
 		}
 	}
@@ -135,11 +138,13 @@ func run() error {
 	h.SetKey(key)
 	h.SetCryptoKey(privateKey)
 	h.SetAuditManager(auditManager)
+	var trustedSubnetNet *net.IPNet
 	if trustedSubnet != "" {
 		_, subnet, err := net.ParseCIDR(trustedSubnet)
 		if err != nil {
 			return fmt.Errorf("invalid trusted subnet: %w", err)
 		}
+		trustedSubnetNet = subnet
 		h.SetTrustedSubnet(subnet)
 	}
 
@@ -165,15 +170,31 @@ func run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 
-	errChan := make(chan error, 1)
+	errChan := make(chan error, 2)
 	go func() {
 		log.Printf("Server listening on %s\n", srv.Addr)
 		errChan <- srv.ListenAndServe()
 	}()
 
+	var grpcSrv *grpc.Server
+	if grpcAddress != "" {
+		listener, err := net.Listen("tcp", grpcAddress)
+		if err != nil {
+			return fmt.Errorf("failed to listen gRPC address: %w", err)
+		}
+		grpcSrv = grpc.NewServer(grpc.UnaryInterceptor(grpcserver.IPSubnetInterceptor(trustedSubnetNet)))
+		proto.RegisterMetricsServer(grpcSrv, grpcserver.NewMetricsService(storage, dbPool))
+		go func() {
+			log.Printf("gRPC server listening on %s\n", grpcAddress)
+			if err := grpcSrv.Serve(listener); err != nil {
+				errChan <- fmt.Errorf("gRPC server error: %w", err)
+			}
+		}()
+	}
+
 	select {
 	case err := <-errChan:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, grpc.ErrServerStopped) {
 			return fmt.Errorf("server error: %w", err)
 		}
 	case sig := <-sigChan:
@@ -181,6 +202,9 @@ func run() error {
 		repository.SaveMetricsToFile(storage, fileStoragePath)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if grpcSrv != nil {
+			grpcSrv.GracefulStop()
+		}
 		return srv.Shutdown(ctx)
 	}
 

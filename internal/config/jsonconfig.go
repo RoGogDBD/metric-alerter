@@ -23,6 +23,7 @@ const (
 	EnvReportInterval = "REPORT_INTERVAL"
 	EnvRateLimit      = "RATE_LIMIT"
 	EnvConfig         = "CONFIG"
+	EnvGRPCAddress    = "GRPC_ADDRESS"
 )
 
 // Константы для флагов командной строки
@@ -41,6 +42,7 @@ const (
 	FlagReportInterval = "r"
 	FlagRateLimit      = "l"
 	FlagConfig         = "c"
+	FlagGRPCAddress    = "grpc-address"
 )
 
 type (
@@ -56,6 +58,7 @@ type (
 		AuditURL      string `json:"audit_url"`      // AUDIT_URL или флаг -audit-url
 		Key           string `json:"key"`            // KEY или флаг -k
 		TrustedSubnet string `json:"trusted_subnet"` // TRUSTED_SUBNET или флаг -t
+		GRPCAddress   string `json:"grpc_address"`   // GRPC_ADDRESS или флаг -grpc-address
 	}
 
 	// AgentJSONConfig представляет конфигурацию агента в формате JSON.
@@ -66,6 +69,7 @@ type (
 		RateLimit      *int   `json:"rate_limit"`      // RATE_LIMIT или флаг -l
 		CryptoKey      string `json:"crypto_key"`      // CRYPTO_KEY или флаг -crypto-key
 		Key            string `json:"key"`             // KEY или флаг -k
+		GRPCAddress    string `json:"grpc_address"`    // GRPC_ADDRESS или флаг -grpc-address
 	}
 )
 
@@ -76,6 +80,7 @@ func (jc *AgentJSONConfig) ApplyToAgent(
 	key *string,
 	crypto *string,
 	addr *NetAddress,
+	grpcAddr *string,
 ) {
 	if jc == nil {
 		return
@@ -113,6 +118,11 @@ func (jc *AgentJSONConfig) ApplyToAgent(
 	if *crypto == "" && jc.CryptoKey != "" {
 		*crypto = jc.CryptoKey
 	}
+
+	// GRPCAddress.
+	if *grpcAddr == "" && jc.GRPCAddress != "" {
+		*grpcAddr = jc.GRPCAddress
+	}
 }
 
 // ApplyToServer применяет настройки из ServerJSONConfig к переданным параметрам,
@@ -127,6 +137,7 @@ func (jc *ServerJSONConfig) ApplyToServer(
 	auditFile *string,
 	auditURL *string,
 	trustedSubnet *string,
+	grpcAddr *string,
 ) {
 	if jc == nil {
 		return
@@ -163,6 +174,9 @@ func (jc *ServerJSONConfig) ApplyToServer(
 	}
 	if *trustedSubnet == "" && jc.TrustedSubnet != "" {
 		*trustedSubnet = jc.TrustedSubnet
+	}
+	if *grpcAddr == "" && jc.GRPCAddress != "" {
+		*grpcAddr = jc.GRPCAddress
 	}
 }
 
