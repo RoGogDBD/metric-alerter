@@ -406,22 +406,19 @@ func computeHMACSHA256(data []byte, key string) string {
 func buildGRPCMetrics(metrics []models.Metrics) []*proto.Metric {
 	result := make([]*proto.Metric, 0, len(metrics))
 	for _, m := range metrics {
-		metricType := proto.Metric_GAUGE
-		if m.MType == "counter" {
-			metricType = proto.Metric_COUNTER
-		}
 		out := &proto.Metric{
 			Id:   m.ID,
-			Type: metricType,
+			Type: proto.Metric_GAUGE,
 		}
-		switch metricType {
-		case proto.Metric_GAUGE:
-			if m.Value != nil {
-				out.Value = *m.Value
-			}
-		case proto.Metric_COUNTER:
+		switch m.MType {
+		case "counter":
+			out.Type = proto.Metric_COUNTER
 			if m.Delta != nil {
 				out.Delta = *m.Delta
+			}
+		default:
+			if m.Value != nil {
+				out.Value = *m.Value
 			}
 		}
 		result = append(result, out)
@@ -517,7 +514,10 @@ func main() {
 	fmt.Println("Poll interval", state.Config.PollInterval)
 
 	if state.Config.GRPCAddress != "" {
-		conn, err := grpc.Dial(state.Config.GRPCAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := grpc.NewClient(
+			state.Config.GRPCAddress,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
 		if err != nil {
 			log.Fatalf("failed to connect to gRPC server: %v", err)
 		}
