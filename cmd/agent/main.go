@@ -402,6 +402,8 @@ func computeHMACSHA256(data []byte, key string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// FIX.
+
 // buildGRPCMetrics преобразует метрики агента в gRPC формат.
 func buildGRPCMetrics(metrics []models.Metrics) []*proto.Metric {
 	result := make([]*proto.Metric, 0, len(metrics))
