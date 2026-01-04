@@ -1,8 +1,10 @@
 package grpcserver
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/RoGogDBD/metric-alerter/internal/proto"
 	"github.com/RoGogDBD/metric-alerter/internal/repository"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc/codes"
