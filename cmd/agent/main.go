@@ -27,6 +27,7 @@ import (
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/RoGogDBD/metric-alerter/internal/crypto"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
+	"github.com/RoGogDBD/metric-alerter/internal/proto"
 	"github.com/RoGogDBD/metric-alerter/internal/version"
 	"github.com/go-resty/resty/v2"
 	"github.com/shirou/gopsutil/v3/cpu"
