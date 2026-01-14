@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -26,10 +27,14 @@ import (
 	"github.com/RoGogDBD/metric-alerter/internal/config"
 	"github.com/RoGogDBD/metric-alerter/internal/crypto"
 	models "github.com/RoGogDBD/metric-alerter/internal/model"
+	"github.com/RoGogDBD/metric-alerter/internal/proto"
 	"github.com/RoGogDBD/metric-alerter/internal/version"
 	"github.com/go-resty/resty/v2"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 var (
@@ -69,6 +74,7 @@ type (
 		RateLimit      int            // Ограничение на количество параллельных отправок.
 		Key            string         // Ключ для подписи запросов.
 		CryptoKey      *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
+		GRPCAddress    string         // Адрес gRPC-сервера.
 	}
 
 	// MetricsCollector — сборщик метрик, хранит значения и счетчик опросов.
@@ -93,6 +99,14 @@ type (
 		Client    *resty.Client  // HTTP-клиент.
 		Key       string         // Ключ для подписи.
 		CryptoKey *rsa.PublicKey // Публичный ключ для асимметричного шифрования.
+		RealIP    string         // IP хоста агента.
+	}
+
+	// GRPCSender реализует MetricsSender, отправляя метрики через gRPC.
+	GRPCSender struct {
+		Client proto.MetricsClient // gRPC клиент метрик.
+		Conn   *grpc.ClientConn    // gRPC соединение.
+		RealIP string              // IP хоста агента.
 	}
 )
 
@@ -294,6 +308,10 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 			SetHeader("Content-Encoding", "gzip").
 			SetBody(dataToSend)
 
+		if rs.RealIP != "" {
+			req.SetHeader("X-Real-IP", rs.RealIP)
+		}
+
 		if rs.CryptoKey != nil {
 			req.SetHeader("X-Encrypted", "true")
 		}
@@ -321,6 +339,58 @@ func (rs *RestySender) SendBatch(metrics []models.Metrics) error {
 	return err
 }
 
+// SendBatch отправляет батч метрик на gRPC сервер.
+func (gs *GRPCSender) SendBatch(metrics []models.Metrics) error {
+	req := &proto.UpdateMetricsRequest{Metrics: buildGRPCMetrics(metrics)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	return config.RetryWithBackoff(ctx, func() error {
+		requestCtx := ctx
+		if gs.RealIP != "" {
+			requestCtx = metadata.AppendToOutgoingContext(ctx, "x-real-ip", gs.RealIP)
+		}
+		if _, err := gs.Client.UpdateMetrics(requestCtx, req); err != nil {
+			return fmt.Errorf("failed to send metrics via gRPC: %w", err)
+		}
+		return nil
+	})
+}
+
+// Close закрывает gRPC соединение.
+func (gs *GRPCSender) Close() error {
+	return gs.Conn.Close()
+}
+
+// resolveHostIP пытается определить IP-адрес хоста агента.
+func resolveHostIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		ip = ip.To4()
+		if ip == nil {
+			continue
+		}
+		return ip.String()
+	}
+
+	return "127.0.0.1"
+}
+
 // computeHMACSHA256 вычисляет HMAC-SHA256 для данных с заданным ключом.
 //
 // data — данные для подписи.
@@ -330,6 +400,32 @@ func computeHMACSHA256(data []byte, key string) string {
 	h := hmac.New(sha256.New, []byte(key))
 	h.Write(data)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// FIX.
+
+// buildGRPCMetrics преобразует метрики агента в gRPC формат.
+func buildGRPCMetrics(metrics []models.Metrics) []*proto.Metric {
+	result := make([]*proto.Metric, 0, len(metrics))
+	for _, m := range metrics {
+		out := &proto.Metric{
+			Id:   m.ID,
+			Type: proto.Metric_GAUGE,
+		}
+		switch m.MType {
+		case "counter":
+			out.Type = proto.Metric_COUNTER
+			if m.Delta != nil {
+				out.Delta = *m.Delta
+			}
+		default:
+			if m.Value != nil {
+				out.Value = *m.Value
+			}
+		}
+		result = append(result, out)
+	}
+	return result
 }
 
 // parseFlags парсит флаги командной строки и переменные окружения, возвращает адрес сервера и состояние агента.
@@ -343,6 +439,7 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 	key := flag.String(config.FlagKey, "", "Key for signing requests")
 	limit := flag.Int(config.FlagRateLimit, 1, "Rate limit (max concurrent outgoing requests)")
 	cryptoKey := flag.String(config.FlagCryptoKey, "", "Path to public key for asymmetric encryption")
+	grpcAddress := flag.String(config.FlagGRPCAddress, "", "gRPC server address")
 
 	flag.Parse()
 
@@ -362,6 +459,9 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 	if envCrypto := config.EnvString(config.EnvCryptoKey); envCrypto != "" {
 		*cryptoKey = envCrypto
 	}
+	if envGRPC := config.EnvString(config.EnvGRPCAddress); envGRPC != "" {
+		*grpcAddress = envGRPC
+	}
 
 	configFilePath := config.GetConfigFilePathWithFlag(*configFileFlag)
 	if configFilePath != "" {
@@ -369,7 +469,7 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 		if err != nil {
 			log.Printf("Warning: failed to load JSON config: %v", err)
 		} else if jsonConfig != nil {
-			jsonConfig.ApplyToAgent(poll, report, limit, key, cryptoKey, addr)
+			jsonConfig.ApplyToAgent(poll, report, limit, key, cryptoKey, addr, grpcAddress)
 		}
 	}
 
@@ -389,6 +489,7 @@ func parseFlags() (*config.NetAddress, *AgentState) {
 			RateLimit:      *limit,
 			Key:            *key,
 			CryptoKey:      publicKey,
+			GRPCAddress:    *grpcAddress,
 		},
 		Collector: &MetricsCollector{
 			metrics:   make(map[string]Metric),
@@ -414,16 +515,33 @@ func main() {
 	fmt.Println("Report interval", state.Config.ReportInterval)
 	fmt.Println("Poll interval", state.Config.PollInterval)
 
-	restyClient := resty.New().
-		SetBaseURL("http://" + addr.String()).
-		SetTimeout(5 * time.Second).
-		SetRetryCount(3).
-		SetRetryWaitTime(500 * time.Millisecond)
+	if state.Config.GRPCAddress != "" {
+		conn, err := grpc.NewClient(
+			state.Config.GRPCAddress,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if err != nil {
+			log.Fatalf("failed to connect to gRPC server: %v", err)
+		}
+		state.Sender = &GRPCSender{
+			Client: proto.NewMetricsClient(conn),
+			Conn:   conn,
+			RealIP: resolveHostIP(),
+		}
+		log.Printf("gRPC sender enabled: %s", state.Config.GRPCAddress)
+	} else {
+		restyClient := resty.New().
+			SetBaseURL("http://" + addr.String()).
+			SetTimeout(5 * time.Second).
+			SetRetryCount(3).
+			SetRetryWaitTime(500 * time.Millisecond)
 
-	state.Sender = &RestySender{
-		Client:    restyClient,
-		Key:       state.Config.Key,
-		CryptoKey: state.Config.CryptoKey,
+		state.Sender = &RestySender{
+			Client:    restyClient,
+			Key:       state.Config.Key,
+			CryptoKey: state.Config.CryptoKey,
+			RealIP:    resolveHostIP(),
+		}
 	}
 
 	startWorkerPool(state)
@@ -505,6 +623,12 @@ func main() {
 			// Ждем завершения всех воркеров.
 			log.Println("Waiting for pending requests to complete...")
 			state.wg.Wait()
+
+			if closer, ok := state.Sender.(interface{ Close() error }); ok {
+				if err := closer.Close(); err != nil {
+					log.Printf("failed to close sender: %v", err)
+				}
+			}
 
 			log.Println("Agent shutdown complete")
 			return

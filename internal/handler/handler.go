@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -28,11 +29,12 @@ import (
 //
 // Содержит хранилище метрик, подключение к базе данных, ключ для HMAC и менеджер аудита.
 type Handler struct {
-	storage      repository.Storage  // Хранилище метрик
-	db           *pgxpool.Pool       // Подключение к базе данных
-	key          string              // Ключ для HMAC-подписи
-	cryptoKey    *rsa.PrivateKey     // Приватный ключ для дешифрования
-	auditManager models.AuditSubject // Менеджер аудита
+	storage       repository.Storage  // Хранилище метрик
+	db            *pgxpool.Pool       // Подключение к базе данных
+	key           string              // Ключ для HMAC-подписи
+	cryptoKey     *rsa.PrivateKey     // Приватный ключ для дешифрования
+	auditManager  models.AuditSubject // Менеджер аудита
+	trustedSubnet *net.IPNet          // Доверенная подсеть агента
 }
 
 // NewHandler создает новый экземпляр Handler.
@@ -67,6 +69,11 @@ func (h *Handler) SetAuditManager(manager models.AuditSubject) {
 	h.auditManager = manager
 }
 
+// SetTrustedSubnet устанавливает доверенную подсеть для запросов агента.
+func (h *Handler) SetTrustedSubnet(subnet *net.IPNet) {
+	h.trustedSubnet = subnet
+}
+
 // getClientIP извлекает IP-адрес клиента из HTTP-запроса.
 //
 // Сначала проверяет заголовки X-Forwarded-For и X-Real-IP, затем RemoteAddr.
@@ -78,6 +85,24 @@ func (h *Handler) getClientIP(r *http.Request) string {
 		return ip
 	}
 	return strings.Split(r.RemoteAddr, ":")[0]
+}
+
+func (h *Handler) isTrustedAgentRequest(r *http.Request) bool {
+	if h.trustedSubnet == nil {
+		return true
+	}
+
+	ipString := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+	if ipString == "" {
+		return false
+	}
+
+	ip := net.ParseIP(ipString)
+	if ip == nil {
+		return false
+	}
+
+	return h.trustedSubnet.Contains(ip)
 }
 
 // sendAuditEvent отправляет событие аудита с именами метрик и IP-адресом клиента.
@@ -199,6 +224,11 @@ func ValidateMetricInput(metricType, metricName, metricValue string) (*repositor
 // @Failure 501 {string} string "Неизвестный тип метрики"
 // @Router /update/{type}/{name}/{value} [post]
 func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
+	if !h.isTrustedAgentRequest(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
 	metricValue := chi.URLParam(r, "value")
@@ -339,6 +369,11 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.isTrustedAgentRequest(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
@@ -413,6 +448,11 @@ func (h *Handler) HandleUpdateJSON(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandlerUpdateBatchJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !h.isTrustedAgentRequest(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
